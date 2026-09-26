@@ -716,25 +716,26 @@ cron.schedule(
             "en-GB",
             {
                 timeZone: "Asia/Kolkata",
+                year: "numeric",
+                month: "2-digit",
+                day: "2-digit",
                 hour: "2-digit",
                 minute: "2-digit",
-                hour12: false,
-                weekday: "short"
+                weekday: "short",
+                hour12: false
             }
         );
 
         const parts = formatter.formatToParts(now);
 
-        const hour =
-            parts.find(p => p.type === "hour").value;
+        const getPart = type =>
+            parts.find(p => p.type === type)?.value;
 
-        const minute =
-            parts.find(p => p.type === "minute").value;
+        const currentHour = parseInt(getPart("hour"));
+        const currentMinute = parseInt(getPart("minute"));
 
-        const weekday =
-            parts.find(p => p.type === "weekday").value;
-
-        const currentTime = `${hour}:${minute}`;
+        const currentTime =
+            `${String(currentHour).padStart(2, "0")}:${String(currentMinute).padStart(2, "0")}`;
 
         const weekdayNumbers = {
             Mon: 1,
@@ -747,61 +748,147 @@ cron.schedule(
         };
 
         const currentDay =
-            weekdayNumbers[weekday];
+            weekdayNumbers[getPart("weekday")];
 
-        for (const [eventName, event] of Object.entries(data.events)) {
+        const guild = client.guilds.cache.get(GUILD_ID);
 
-            if (!event.times.includes(currentTime)) {
-                continue;
-            }
+        if (!guild) {
+            console.log("Guild not found.");
+            return;
+        }
 
-            if (
-                event.days &&
-                !event.days.includes(currentDay)
-            ) {
-                continue;
-            }
-
-            const guild = client.guilds.cache.get(GUILD_ID);
-
-            if (!guild) {
-                console.log("Guild not found.");
-                continue;
-            }
-
-            const role =
-                guild.roles.cache.find(
-                    r => r.name === BADMASH_ROLE
-                );
-
-            if (!role) {
-                console.log(
-                    `Role ${BADMASH_ROLE} not found.`
-                );
-
-                continue;
-            }
-
-            const channel =
-                guild.channels.cache.find(
-                    channel =>
-                        channel.isTextBased() &&
-                        channel.permissionsFor(client.user).has("SendMessages")
-                );
-
-            if (!channel) {
-                console.log(
-                    "No usable text channel found."
-                );
-
-                continue;
-            }
-
-            await channel.send(
-                `🔔 **${eventName}** is starting now!\n\n` +
-                `${role}\n` +
-                `Get ready!`
+        const role =
+            guild.roles.cache.find(
+                r => r.name === BADMASH_ROLE
             );
+
+        if (!role) {
+            console.log(
+                `Role ${BADMASH_ROLE} not found.`
+            );
+
+            return;
+        }
+
+        const channel =
+            guild.channels.cache.find(
+                channel =>
+                    channel.isTextBased() &&
+                    channel.permissionsFor(client.user).has("SendMessages")
+            );
+
+        if (!channel) {
+            console.log(
+                "No usable text channel found."
+            );
+
+            return;
+        }
+
+        /* =========================
+           HELPER FUNCTION
+        ========================= */
+
+        function getTimeDifference(eventTime) {
+
+            const [eventHour, eventMinute] =
+                eventTime.split(":").map(Number);
+
+            let currentTotal =
+                currentHour * 60 + currentMinute;
+
+            let eventTotal =
+                eventHour * 60 + eventMinute;
+
+            let difference =
+                eventTotal - currentTotal;
+
+            if (difference < 0) {
+                difference += 24 * 60;
+            }
+
+            return difference;
+        }
+
+        /* =========================
+           CHECK EVENTS
+        ========================= */
+
+        for (
+            const [eventName, event] of Object.entries(data.events)
+        ) {
+
+            for (const eventTime of event.times) {
+
+                const difference =
+                    getTimeDifference(eventTime);
+
+                /*
+                 * Cartel War:
+                 * Only send the actual event notification.
+                 */
+
+                if (eventName === "Cartel War") {
+
+                    if (difference !== 0) {
+                        continue;
+                    }
+
+                }
+
+                /*
+                 * Other events:
+                 * Send notifications at:
+                 * 15 minutes before
+                 * 10 minutes before
+                 * Event start
+                 */
+
+                if (
+                    difference !== 15 &&
+                    difference !== 10 &&
+                    difference !== 0
+                ) {
+                    continue;
+                }
+
+                /*
+                 * Check weekly event day.
+                 */
+
+                if (event.days) {
+
+                    if (!event.days.includes(currentDay)) {
+                        continue;
+                    }
+                }
+
+                let message;
+
+                if (difference === 15) {
+
+                    message =
+                        `⏰ **${eventName}** starts in **15 minutes!**\n\n` +
+                        `${role}\n` +
+                        `Get ready!`;
+
+                } else if (difference === 10) {
+
+                    message =
+                        `⚠️ **${eventName}** starts in **10 minutes!**\n\n` +
+                        `${role}\n` +
+                        `Get ready!`;
+
+                } else {
+
+                    message =
+                        `🔔 **${eventName}** is starting now!\n\n` +
+                        `${role}\n` +
+                        `Get ready!`;
+                }
+
+                await channel.send(message);
+            }
         }
 
     },
@@ -809,7 +896,6 @@ cron.schedule(
         timezone: "Asia/Kolkata"
     }
 );
-
 /* =========================
    BOT READY
 ========================= */
