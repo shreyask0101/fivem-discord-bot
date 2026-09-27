@@ -14,9 +14,13 @@ const fs = require("fs");
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
+const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;
 
 const BADMASH_ROLE = "💎Badmash";
-const MOD_ROLE = "Discord Moderator 🛠";
+const MOD_ROLES = [
+    "Discord Moderator 🛠",
+    "❤️‍🔥CO Leader"
+];
 
 const DATA_FILE = "./data.json";
 
@@ -56,7 +60,7 @@ let data = loadData();
 
 function isModerator(interaction) {
     return interaction.member.roles.cache.some(
-        role => role.name === MOD_ROLE
+        role => MOD_ROLES.includes(role.name)
     );
 }
 
@@ -506,7 +510,7 @@ client.on("interactionCreate", async interaction => {
 
                 return interaction.reply({
                     content:
-                        `❌ You need the **${MOD_ROLE}** role to use this command.`,
+                         `❌ You need one of the moderator roles to use this command.`,
                     ephemeral: true
                 });
 
@@ -769,21 +773,27 @@ cron.schedule(
 
             return;
         }
+const channel =
+    guild.channels.cache.get(EVENT_CHANNEL_ID);
 
-        const channel =
-            guild.channels.cache.find(
-                channel =>
-                    channel.isTextBased() &&
-                    channel.permissionsFor(client.user).has("SendMessages")
-            );
+if (!channel) {
+    console.log(
+        `Event channel ${EVENT_CHANNEL_ID} not found.`
+    );
 
-        if (!channel) {
-            console.log(
-                "No usable text channel found."
-            );
+    return;
+}
 
-            return;
-        }
+if (
+    !channel.isTextBased() ||
+    !channel.permissionsFor(client.user).has("SendMessages")
+) {
+    console.log(
+        "Bot cannot send messages in the event channel."
+    );
+
+    return;
+}
 
         /* =========================
            HELPER FUNCTION
@@ -914,9 +924,9 @@ client.once("ready", async () => {
         `🔔 Event role: ${BADMASH_ROLE}`
     );
 
-    console.log(
-        `🔐 Moderator role: ${MOD_ROLE}`
-    );
+   console.log(
+    `🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`
+);
 
     await registerCommands();
 });
