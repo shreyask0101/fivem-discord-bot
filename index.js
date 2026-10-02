@@ -15,7 +15,10 @@ const fs = require("fs");
 const TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
-const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;
+
+// Channel Environment Variables
+const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;         // Event Announcements & Cron Pings
+const EVENT_LOG_CHANNEL_ID = process.env.EVENT_LOG_CHANNEL_ID; // Event Logs Submissions
 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
@@ -299,10 +302,12 @@ client.on("interactionCreate", async interaction => {
             }
 
             const messageContent = `🏆 ${event}\n${status}\n${statsFormatted.trim()}`;
-            const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
+            
+            // TARGETS EVENT_LOG_CHANNEL_ID
+            const channel = await client.channels.fetch(EVENT_LOG_CHANNEL_ID).catch(() => null);
 
             if (!channel) {
-                return interaction.editReply({ content: "❌ Event channel not found or bot lacks access." });
+                return interaction.editReply({ content: "❌ Event Log channel not found. Check EVENT_LOG_CHANNEL_ID in .env file." });
             }
 
             await channel.send({ content: messageContent, files: [screenshot.url] });
@@ -319,16 +324,17 @@ client.on("interactionCreate", async interaction => {
             const stats = interaction.options.getString("stats");
             const screenshot = interaction.options.getAttachment("screenshot");
 
-            const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
+            // TARGETS EVENT_LOG_CHANNEL_ID
+            const channel = await client.channels.fetch(EVENT_LOG_CHANNEL_ID).catch(() => null);
             if (!channel) {
-                return interaction.editReply({ content: "❌ Event channel not found or bot lacks access." });
+                return interaction.editReply({ content: "❌ Event Log channel not found. Check EVENT_LOG_CHANNEL_ID in .env file." });
             }
 
             let targetMessage;
             try {
                 targetMessage = await channel.messages.fetch(messageId);
             } catch (error) {
-                return interaction.editReply({ content: "❌ Could not find that message in event-logs. Check the message ID." });
+                return interaction.editReply({ content: "❌ Could not find that message in the event-logs channel. Verify the message ID." });
             }
 
             let newContent = targetMessage.content;
@@ -437,7 +443,7 @@ client.on("interactionCreate", async interaction => {
 
         let errorText = "❌ There was an error processing this command.";
         if (error.code === 50013) {
-            errorText = "❌ **Missing Permissions**: The bot lacks permission to post or attach files in the event channel. Check channel settings in Discord.";
+            errorText = "❌ **Missing Permissions**: The bot lacks permission to post or attach files in the log channel. Check channel settings in Discord.";
         }
 
         if (interaction.deferred) {
@@ -479,6 +485,7 @@ cron.schedule(
         const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
         if (!role) return;
 
+        // TARGETS ANNOUNCEMENT EVENT_CHANNEL_ID FOR CRON PINGS
         const channel = guild.channels.cache.get(EVENT_CHANNEL_ID);
         if (!channel) return;
         if (!channel.isTextBased() || !channel.permissionsFor(client.user).has("SendMessages")) return;
@@ -529,6 +536,8 @@ client.once("clientReady", async () => {
     console.log(`🌏 Timezone: Asia/Kolkata`);
     console.log(`🔔 Event role: ${BADMASH_ROLE}`);
     console.log(`🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`);
+    console.log(`📢 Announcement Channel: ${EVENT_CHANNEL_ID}`);
+    console.log(`📋 Log Channel: ${EVENT_LOG_CHANNEL_ID}`);
     
     await registerCommands();
 });
@@ -537,4 +546,4 @@ client.once("clientReady", async () => {
    LOGIN
 ========================= */
 
-client.login(TOKEN);    
+client.login(TOKEN);
