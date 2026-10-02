@@ -5,7 +5,8 @@ const {
     GatewayIntentBits,
     REST,
     Routes,
-    SlashCommandBuilder
+    SlashCommandBuilder,
+    MessageFlags
 } = require("discord.js");
 
 const cron = require("node-cron");
@@ -205,7 +206,7 @@ async function showEvents(interaction) {
         message += event.times.map(formatTime).join(" • ");
         message += `\n${formatDays(event.days)}\n\n`;
     }
-    await interaction.reply({ content: message, ephemeral: false });
+    await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
 }
 
 async function showBonuses(interaction) {
@@ -227,7 +228,7 @@ async function calculateBonus(interaction) {
     const eventName = interaction.options.getString("event");
     const bonus = data.bonuses[eventName];
     if (!bonus) {
-        return interaction.reply({ content: `❌ No bonus configuration found for **${eventName}**.`, ephemeral: true });
+        return interaction.reply({ content: `❌ No bonus configuration found for **${eventName}**.`, flags: MessageFlags.Ephemeral });
     }
 
     const kills = interaction.options.getInteger("kills");
@@ -268,7 +269,7 @@ client.on("interactionCreate", async interaction => {
             if (!isModerator(interaction)) {
                 return interaction.reply({
                     content: `❌ You need one of the moderator roles to use this command.`,
-                    ephemeral: true
+                    flags: MessageFlags.Ephemeral
                 });
             }
         }
@@ -279,7 +280,7 @@ client.on("interactionCreate", async interaction => {
 
         /* --- SUBMIT RESULT --- */
         if (command === "submit-result") {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const event = interaction.options.getString("event");
             const status = interaction.options.getString("status");
@@ -301,7 +302,7 @@ client.on("interactionCreate", async interaction => {
             const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
 
             if (!channel) {
-                return interaction.editReply({ content: "❌ Event channel not found or bot lacks permission to access it." });
+                return interaction.editReply({ content: "❌ Event channel not found or bot lacks access." });
             }
 
             await channel.send({ content: messageContent, files: [screenshot.url] });
@@ -310,7 +311,7 @@ client.on("interactionCreate", async interaction => {
 
         /* --- EDIT RESULT --- */
         if (command === "edit-result") {
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const messageId = interaction.options.getString("message_id");
             const event = interaction.options.getString("event");
@@ -320,14 +321,14 @@ client.on("interactionCreate", async interaction => {
 
             const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
             if (!channel) {
-                return interaction.editReply({ content: "❌ Event channel not found or bot lacks permission to access it." });
+                return interaction.editReply({ content: "❌ Event channel not found or bot lacks access." });
             }
 
             let targetMessage;
             try {
                 targetMessage = await channel.messages.fetch(messageId);
             } catch (error) {
-                return interaction.editReply({ content: "❌ Could not find that message in the event-logs channel. Verify the message ID." });
+                return interaction.editReply({ content: "❌ Could not find that message in event-logs. Check the message ID." });
             }
 
             let newContent = targetMessage.content;
@@ -372,7 +373,7 @@ client.on("interactionCreate", async interaction => {
             const daysString = interaction.options.getString("days");
 
             if (data.events[name]) {
-                return interaction.reply({ content: `❌ **${name}** already exists.`, ephemeral: true });
+                return interaction.reply({ content: `❌ **${name}** already exists.`, flags: MessageFlags.Ephemeral });
             }
             const times = timesString.split(",").map(t => t.trim());
             let days = daysString ? daysString.split(",").map(Number) : null;
@@ -388,7 +389,7 @@ client.on("interactionCreate", async interaction => {
             const daysString = interaction.options.getString("days");
 
             if (!data.events[name]) {
-                return interaction.reply({ content: `❌ Event **${name}** doesn't exist.`, ephemeral: true });
+                return interaction.reply({ content: `❌ Event **${name}** doesn't exist.`, flags: MessageFlags.Ephemeral });
             }
             data.events[name].times = timesString.split(",").map(t => t.trim());
             data.events[name].days = daysString ? daysString.split(",").map(Number) : null;
@@ -400,7 +401,7 @@ client.on("interactionCreate", async interaction => {
         if (command === "remove-event") {
             const name = interaction.options.getString("name");
             if (!data.events[name]) {
-                return interaction.reply({ content: `❌ Event **${name}** doesn't exist.`, ephemeral: true });
+                return interaction.reply({ content: `❌ Event **${name}** doesn't exist.`, flags: MessageFlags.Ephemeral });
             }
             delete data.events[name];
             saveData(data);
@@ -424,7 +425,7 @@ client.on("interactionCreate", async interaction => {
         if (command === "remove-bonus") {
             const event = interaction.options.getString("event");
             if (!data.bonuses[event]) {
-                return interaction.reply({ content: `❌ No bonus configuration found for **${event}**.`, ephemeral: true });
+                return interaction.reply({ content: `❌ No bonus configuration found for **${event}**.`, flags: MessageFlags.Ephemeral });
             }
             data.bonuses[event] = { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 0, killOnLoss: false };
             saveData(data);
@@ -433,12 +434,18 @@ client.on("interactionCreate", async interaction => {
 
     } catch (error) {
         console.error("Command Execution Error:", error);
+
+        let errorText = "❌ There was an error processing this command.";
+        if (error.code === 50013) {
+            errorText = "❌ **Missing Permissions**: The bot lacks permission to post or attach files in the event channel. Check channel settings in Discord.";
+        }
+
         if (interaction.deferred) {
-            await interaction.editReply({ content: "❌ There was an error processing this command." }).catch(() => {});
+            await interaction.editReply({ content: errorText }).catch(() => {});
         } else if (interaction.replied) {
-            await interaction.followUp({ content: "❌ There was an error processing this command.", ephemeral: true }).catch(() => {});
+            await interaction.followUp({ content: errorText, flags: MessageFlags.Ephemeral }).catch(() => {});
         } else {
-            await interaction.reply({ content: "❌ There was an error processing this command.", ephemeral: true }).catch(() => {});
+            await interaction.reply({ content: errorText, flags: MessageFlags.Ephemeral }).catch(() => {});
         }
     }
 });
@@ -517,7 +524,7 @@ cron.schedule(
    BOT READY
 ========================= */
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     console.log(`🌏 Timezone: Asia/Kolkata`);
     console.log(`🔔 Event role: ${BADMASH_ROLE}`);
@@ -530,4 +537,4 @@ client.once("ready", async () => {
    LOGIN
 ========================= */
 
-client.login(TOKEN);
+client.login(TOKEN);    
