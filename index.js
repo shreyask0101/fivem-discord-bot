@@ -54,30 +54,31 @@ const DEFAULT_BONUSES = {
 
 function loadData() {
     if (!fs.existsSync(DATA_FILE)) {
-        return {
+        const initialData = {
             events: {},
             bonuses: DEFAULT_BONUSES,
             familyBalance: 0,
             payouts: {}
         };
+        fs.writeFileSync(DATA_FILE, JSON.stringify(initialData, null, 2));
+        return initialData;
     }
 
-    const fileData = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
-
-    // Overwrite stored bonuses with latest policy definition
-    fileData.bonuses = DEFAULT_BONUSES;
-
-    if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
-    if (!fileData.payouts) fileData.payouts = {};
-
-    return fileData;
+    try {
+        const fileData = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+        fileData.bonuses = DEFAULT_BONUSES;
+        if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
+        if (!fileData.payouts) fileData.payouts = {};
+        if (!fileData.events) fileData.events = {};
+        return fileData;
+    } catch (err) {
+        console.error("Error reading data.json, preserving structure:", err);
+        return { events: {}, bonuses: DEFAULT_BONUSES, familyBalance: 0, payouts: {} };
+    }
 }
 
 function saveData(data) {
-    fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(data, null, 2)
-    );
+    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
 }
 
 let data = loadData();
@@ -145,8 +146,27 @@ const commands = [
     new SlashCommandBuilder()
         .setName("submit-result")
         .setDescription("Submit event logs with kills and screenshot")
-        .addStringOption(option => option.setName("event").setDescription("Event name (e.g. Cartel War, Biz War)").setRequired(true))
-        .addStringOption(option => option.setName("status").setDescription("Win or Loss").setRequired(true).addChoices({ name: 'WIN', value: 'WIN' }, { name: 'LOSS', value: 'LOSS' }))
+        .addStringOption(option =>
+            option.setName("event")
+                .setDescription("Select event name")
+                .setRequired(true)
+                .addChoices(
+                    { name: "Cartel War", value: "Cartel War" },
+                    { name: "Crown Holder", value: "Crown Holder" },
+                    { name: "Weapons Factory", value: "Weapons Factory" },
+                    { name: "Biz War", value: "Biz War" },
+                    { name: "Clan Raid", value: "Clan Raid" }
+                )
+        )
+        .addStringOption(option =>
+            option.setName("status")
+                .setDescription("Win or Loss")
+                .setRequired(true)
+                .addChoices(
+                    { name: 'WIN', value: 'WIN' },
+                    { name: 'LOSS', value: 'LOSS' }
+                )
+        )
         .addStringOption(option => option.setName("stats").setDescription("Format: @User 5, @User 3").setRequired(true))
         .addAttachmentOption(option => option.setName("screenshot").setDescription("Screenshot of the result").setRequired(true)),
 
@@ -154,8 +174,27 @@ const commands = [
         .setName("edit-result")
         .setDescription("Edit an existing event log")
         .addStringOption(option => option.setName("message_id").setDescription("Message ID of the log in event-logs").setRequired(true))
-        .addStringOption(option => option.setName("event").setDescription("Event name").setRequired(false))
-        .addStringOption(option => option.setName("status").setDescription("Win or Loss").setRequired(false).addChoices({ name: 'WIN', value: 'WIN' }, { name: 'LOSS', value: 'LOSS' }))
+        .addStringOption(option =>
+            option.setName("event")
+                .setDescription("Select event name")
+                .setRequired(false)
+                .addChoices(
+                    { name: "Cartel War", value: "Cartel War" },
+                    { name: "Crown Holder", value: "Crown Holder" },
+                    { name: "Weapons Factory", value: "Weapons Factory" },
+                    { name: "Biz War", value: "Biz War" },
+                    { name: "Clan Raid", value: "Clan Raid" }
+                )
+        )
+        .addStringOption(option =>
+            option.setName("status")
+                .setDescription("Win or Loss")
+                .setRequired(false)
+                .addChoices(
+                    { name: 'WIN', value: 'WIN' },
+                    { name: 'LOSS', value: 'LOSS' }
+                )
+        )
         .addStringOption(option => option.setName("stats").setDescription("Format: @User 5, @User 3").setRequired(false))
         .addAttachmentOption(option => option.setName("screenshot").setDescription("New screenshot (replaces old)").setRequired(false)),
 
@@ -284,7 +323,6 @@ client.on("interactionCreate", async interaction => {
 
         /* --- CHANNEL ISOLATION CHECKS --- */
 
-        // 1. FAMILY BALANCE CHANNEL RESTRICTION (┇・family-balance-logs)
         const familyBalanceCommands = ["family-balance", "edit-family-balance"];
         if (familyBalanceCommands.includes(command) && !isFamilyBalanceChannel(interaction)) {
             return interaction.reply({
@@ -293,7 +331,6 @@ client.on("interactionCreate", async interaction => {
             });
         }
 
-        // 2. BONUS & PAYOUT LOGS CHANNEL RESTRICTION (〣💸・bonus-logs)
         const bonusLogCommands = ["payout", "all-payouts", "edit-payout"];
         if (bonusLogCommands.includes(command) && !isBonusLogChannel(interaction)) {
             return interaction.reply({
@@ -305,7 +342,7 @@ client.on("interactionCreate", async interaction => {
         if (command === "events") return await showEvents(interaction);
         if (command === "bonuses") return await showBonuses(interaction);
 
-        /* --- FAMILY BALANCE LOGS COMMANDS --- */
+        /* --- FAMILY BALANCE COMMANDS --- */
 
         if (command === "family-balance") {
             return interaction.reply({
@@ -341,7 +378,7 @@ client.on("interactionCreate", async interaction => {
             }
             let list = "## 📜 Cumulative Member Payout Balances\n\n";
             for (const [id, info] of Object.entries(data.payouts)) {
-                list += `• <@${id}> (${info.username}): **$${info.amount.toLocaleString()}**\n`;
+                list += `• <@${id}>: **$${info.amount.toLocaleString()}**\n`;
             }
             return interaction.reply({ content: list });
         }
@@ -352,20 +389,18 @@ client.on("interactionCreate", async interaction => {
             const amount = interaction.options.getInteger("amount");
 
             if (!data.payouts[member.id]) {
-                data.payouts[member.id] = { username: member.username, amount: 0 };
+                data.payouts[member.id] = { amount: 0 };
             }
 
             if (action === "add") data.payouts[member.id].amount += amount;
             else if (action === "subtract") data.payouts[member.id].amount = Math.max(0, data.payouts[member.id].amount - amount);
             else if (action === "set") data.payouts[member.id].amount = amount;
 
-            data.payouts[member.id].username = member.username;
             saveData(data);
-
             return interaction.reply(`✅ Updated ${member}'s payout balance (${action}). New Total: **$${data.payouts[member.id].amount.toLocaleString()}**`);
         }
 
-        /* --- EVENT RESULT SUBMISSIONS (EVENT LOGS CHANNEL) --- */
+        /* --- EVENT RESULT SUBMISSIONS --- */
 
         if (command === "submit-result") {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -390,7 +425,6 @@ client.on("interactionCreate", async interaction => {
                     const userIdMatch = memberMention.match(/<@!?(\d+)>/);
                     let earnedPayout = 0;
 
-                    // Calculate payout according to policy
                     if (bonus) {
                         if (isWin || bonus.killOnLoss) {
                             earnedPayout += kills * (bonus.kill || 0);
@@ -400,14 +434,12 @@ client.on("interactionCreate", async interaction => {
                         }
                     }
 
-                    // Update tagged user balance in data.payouts
                     if (userIdMatch) {
                         const userId = userIdMatch[1];
                         if (!data.payouts[userId]) {
-                            data.payouts[userId] = { username: memberMention, amount: 0 };
+                            data.payouts[userId] = { amount: 0 };
                         }
                         data.payouts[userId].amount += earnedPayout;
-                        data.payouts[userId].username = memberMention;
                     }
 
                     statsFormatted += `${memberMention} — ${kills} Kills — +$${earnedPayout.toLocaleString()}\n`;
@@ -424,7 +456,7 @@ client.on("interactionCreate", async interaction => {
             }
 
             await channel.send({ content: messageContent, files: [screenshot.url] });
-            return interaction.editReply({ content: "✅ Result submitted and member payouts automatically calculated and updated!" });
+            return interaction.editReply({ content: "✅ Result submitted and member payouts automatically updated!" });
         }
 
         if (command === "edit-result") {
@@ -592,7 +624,7 @@ cron.schedule(
                 const difference = getTimeDifference(eventTime);
 
                 if (eventName === "Cartel War") {
-                    if (difference !== 10) continue;
+                    if (difference !== 0) continue;
                 }
 
                 if (difference !== 15 && difference !== 10 && difference !== 0) continue;
