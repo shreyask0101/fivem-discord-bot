@@ -25,7 +25,7 @@ const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
     "Discord Moderator 🛠",
-    "❤️‍🔥CO Leader"
+    "❤️️‍🔥CO Leader"
 ];
 
 const DATA_FILE = "./data.json";
@@ -37,7 +37,7 @@ const client = new Client({
 });
 
 /* =========================
-   DEFAULT EVENT BONUSES
+   UPDATED PAYOUT POLICY
 ========================= */
 
 const DEFAULT_BONUSES = {
@@ -64,11 +64,11 @@ function loadData() {
 
     const fileData = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
 
+    // Overwrite stored bonuses with latest policy definition
+    fileData.bonuses = DEFAULT_BONUSES;
+
     if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
     if (!fileData.payouts) fileData.payouts = {};
-    if (!fileData.bonuses || Object.keys(fileData.bonuses).length === 0) {
-        fileData.bonuses = DEFAULT_BONUSES;
-    }
 
     return fileData;
 }
@@ -390,7 +390,7 @@ client.on("interactionCreate", async interaction => {
                     const userIdMatch = memberMention.match(/<@!?(\d+)>/);
                     let earnedPayout = 0;
 
-                    // Calculate payout according to event policy rates
+                    // Calculate payout according to policy
                     if (bonus) {
                         if (isWin || bonus.killOnLoss) {
                             earnedPayout += kills * (bonus.kill || 0);
@@ -400,7 +400,7 @@ client.on("interactionCreate", async interaction => {
                         }
                     }
 
-                    // Update tagged user's cumulative balance in data.payouts
+                    // Update tagged user balance in data.payouts
                     if (userIdMatch) {
                         const userId = userIdMatch[1];
                         if (!data.payouts[userId]) {
@@ -592,7 +592,7 @@ cron.schedule(
                 const difference = getTimeDifference(eventTime);
 
                 if (eventName === "Cartel War") {
-                    if (difference !== 0) continue;
+                    if (difference !== 10) continue;
                 }
 
                 if (difference !== 15 && difference !== 10 && difference !== 0) continue;
