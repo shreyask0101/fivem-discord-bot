@@ -17,8 +17,10 @@ const CLIENT_ID = process.env.CLIENT_ID;
 const GUILD_ID = process.env.GUILD_ID;
 
 // Channel Environment Variables
-const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;         // Event Announcements & Cron Pings
-const EVENT_LOG_CHANNEL_ID = process.env.EVENT_LOG_CHANNEL_ID; // Event Logs Submissions
+const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;                 // Event Announcements & Cron Pings
+const EVENT_LOG_CHANNEL_ID = process.env.EVENT_LOG_CHANNEL_ID;         // Event Logs Submissions (〣🏆・event-logs)
+const FAMILY_BALANCE_CHANNEL_ID = process.env.FAMILY_BALANCE_CHANNEL_ID; // Family Balance Logs Channel (┇・family-balance-logs)
+const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus & Payout Logs Channel (〣💸・bonus-logs)
 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
@@ -35,6 +37,18 @@ const client = new Client({
 });
 
 /* =========================
+   DEFAULT EVENT BONUSES
+========================= */
+
+const DEFAULT_BONUSES = {
+    "Cartel War": { kill: 3000, alive: 0, top: 0, parachute: 0, attendance: 0, killOnLoss: false },
+    "Crown Holder": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
+    "Weapons Factory": { kill: 3000, alive: 0, top: 10000, parachute: 2000, attendance: 0, killOnLoss: false },
+    "Biz War": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
+    "Clan Raid": { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 2500, killOnLoss: false }
+};
+
+/* =========================
    DATA FUNCTIONS
 ========================= */
 
@@ -42,10 +56,21 @@ function loadData() {
     if (!fs.existsSync(DATA_FILE)) {
         return {
             events: {},
-            bonuses: {}
+            bonuses: DEFAULT_BONUSES,
+            familyBalance: 0,
+            payouts: {}
         };
     }
-    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+
+    const fileData = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+
+    if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
+    if (!fileData.payouts) fileData.payouts = {};
+    if (!fileData.bonuses || Object.keys(fileData.bonuses).length === 0) {
+        fileData.bonuses = DEFAULT_BONUSES;
+    }
+
+    return fileData;
 }
 
 function saveData(data) {
@@ -58,13 +83,23 @@ function saveData(data) {
 let data = loadData();
 
 /* =========================
-   PERMISSION CHECK
+   HELPERS & PERMISSIONS
 ========================= */
 
 function isModerator(interaction) {
     return interaction.member.roles.cache.some(
         role => MOD_ROLES.includes(role.name)
     );
+}
+
+function isFamilyBalanceChannel(interaction) {
+    if (!FAMILY_BALANCE_CHANNEL_ID) return true;
+    return interaction.channelId === FAMILY_BALANCE_CHANNEL_ID;
+}
+
+function isBonusLogChannel(interaction) {
+    if (!BONUS_LOG_CHANNEL_ID) return true;
+    return interaction.channelId === BONUS_LOG_CHANNEL_ID;
 }
 
 /* =========================
@@ -83,35 +118,21 @@ const commands = [
     new SlashCommandBuilder()
         .setName("add-event")
         .setDescription("Add a new event")
-        .addStringOption(option =>
-            option.setName("name").setDescription("Event name").setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName("times").setDescription("Times in HH:MM format separated by commas").setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName("days").setDescription("Optional days: 1=Mon, 2=Tue ... 7=Sun").setRequired(false)
-        ),
+        .addStringOption(option => option.setName("name").setDescription("Event name").setRequired(true))
+        .addStringOption(option => option.setName("times").setDescription("Times in HH:MM format separated by commas").setRequired(true))
+        .addStringOption(option => option.setName("days").setDescription("Optional days: 1=Mon, 2=Tue ... 7=Sun").setRequired(false)),
 
     new SlashCommandBuilder()
         .setName("edit-event")
         .setDescription("Edit an existing event")
-        .addStringOption(option =>
-            option.setName("name").setDescription("Event name").setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName("times").setDescription("Times in HH:MM separated by commas").setRequired(true)
-        )
-        .addStringOption(option =>
-            option.setName("days").setDescription("Optional days: 1=Mon ... 7=Sun").setRequired(false)
-        ),
+        .addStringOption(option => option.setName("name").setDescription("Event name").setRequired(true))
+        .addStringOption(option => option.setName("times").setDescription("Times in HH:MM separated by commas").setRequired(true))
+        .addStringOption(option => option.setName("days").setDescription("Optional days: 1=Mon ... 7=Sun").setRequired(false)),
 
     new SlashCommandBuilder()
         .setName("remove-event")
         .setDescription("Remove an event")
-        .addStringOption(option =>
-            option.setName("name").setDescription("Event name").setRequired(true)
-        ),
+        .addStringOption(option => option.setName("name").setDescription("Event name").setRequired(true)),
 
     new SlashCommandBuilder()
         .setName("set-bonus")
@@ -131,15 +152,16 @@ const commands = [
 
     new SlashCommandBuilder()
         .setName("calculate-bonus")
-        .setDescription("Calculate a player's event bonus")
-        .addStringOption(option => option.setName("event").setDescription("Event name").setRequired(true))
+        .setDescription("Calculate event bonus/payout based on kills and stats")
+        .addStringOption(option => option.setName("event").setDescription("Event name (e.g., Cartel War, Crown Holder)").setRequired(true))
         .addIntegerOption(option => option.setName("kills").setDescription("Number of kills").setRequired(true).setMinValue(0))
         .addBooleanOption(option => option.setName("won").setDescription("Did the clan win?").setRequired(true))
         .addBooleanOption(option => option.setName("alive").setDescription("Was the player alive at the end?").setRequired(true))
-        .addBooleanOption(option => option.setName("top").setDescription("Was the player eligible for the top-player bonus?").setRequired(true))
+        .addBooleanOption(option => option.setName("top").setDescription("Was the player top shooter / most points?").setRequired(true))
         .addIntegerOption(option => option.setName("parachutes").setDescription("Number of parachutes").setRequired(true).setMinValue(0))
         .addIntegerOption(option => option.setName("selfkills").setDescription("Number of self-kills").setRequired(true).setMinValue(0))
-        .addBooleanOption(option => option.setName("attended").setDescription("Attended the event?").setRequired(true)),
+        .addBooleanOption(option => option.setName("attended").setDescription("Attended the event?").setRequired(true))
+        .addUserOption(option => option.setName("member").setDescription("Optionally credit payout directly to a member (Mod only)").setRequired(false)),
 
     new SlashCommandBuilder()
         .setName("submit-result")
@@ -157,6 +179,45 @@ const commands = [
         .addStringOption(option => option.setName("status").setDescription("Win or Loss").setRequired(false).addChoices({ name: 'WIN', value: 'WIN' }, { name: 'LOSS', value: 'LOSS' }))
         .addStringOption(option => option.setName("stats").setDescription("Format: @User 5, @User 3").setRequired(false))
         .addAttachmentOption(option => option.setName("screenshot").setDescription("New screenshot (replaces old)").setRequired(false)),
+
+    /* --- PAYOUT COMMANDS (BONUS LOGS CHANNEL) --- */
+
+    new SlashCommandBuilder()
+        .setName("payout")
+        .setDescription("Check personal total payout or another member's payout")
+        .addUserOption(option => option.setName("member").setDescription("Member to check").setRequired(false)),
+
+    new SlashCommandBuilder()
+        .setName("all-payouts")
+        .setDescription("Show payout balances for all family members"),
+
+    new SlashCommandBuilder()
+        .setName("add-payout")
+        .setDescription("Add money to a member's payout balance (Mod only)")
+        .addUserOption(option => option.setName("member").setDescription("Member").setRequired(true))
+        .addIntegerOption(option => option.setName("amount").setDescription("Amount to add").setRequired(true)),
+
+    new SlashCommandBuilder()
+        .setName("set-payout")
+        .setDescription("Set exact payout balance for a member (Mod only)")
+        .addUserOption(option => option.setName("member").setDescription("Member").setRequired(true))
+        .addIntegerOption(option => option.setName("amount").setDescription("New total payout").setRequired(true)),
+
+    /* --- FAMILY BALANCE COMMANDS (FAMILY BALANCE LOGS CHANNEL) --- */
+
+    new SlashCommandBuilder()
+        .setName("family-balance")
+        .setDescription("Check the current overall Family Balance"),
+
+    new SlashCommandBuilder()
+        .setName("edit-family-balance")
+        .setDescription("Edit total Family Balance (Mod only)")
+        .addStringOption(option => option.setName("action").setDescription("Operation").setRequired(true).addChoices(
+            { name: "Add", value: "add" },
+            { name: "Subtract", value: "subtract" },
+            { name: "Set Exact", value: "set" }
+        ))
+        .addIntegerOption(option => option.setName("amount").setDescription("Amount").setRequired(true).setMinValue(0))
 ];
 
 /* =========================
@@ -174,13 +235,12 @@ async function registerCommands() {
         );
         console.log("✅ Slash commands registered.");
     } catch (error) {
-        console.error("❌ Command registration error:");
-        console.error(error);
+        console.error("❌ Command registration error:", error);
     }
 }
 
 /* =========================
-   EVENTS DISPLAY HELPERS
+   HELPERS
 ========================= */
 
 function formatTime(time) {
@@ -213,17 +273,17 @@ async function showEvents(interaction) {
 }
 
 async function showBonuses(interaction) {
-    let message = "## 💰 Event Bonuses\n\n";
+    let message = "## 💰 Event Bonuses & Payout Structure\n\n";
     for (const [name, bonus] of Object.entries(data.bonuses)) {
         message += `### ${name}\n`;
         if (bonus.kill > 0) message += `🔫 Kill: $${bonus.kill.toLocaleString()}\n`;
         if (bonus.alive > 0) message += `❤️ Alive at end: $${bonus.alive.toLocaleString()}\n`;
-        if (bonus.top > 0) message += `🏆 Top player: $${bonus.top.toLocaleString()}\n`;
+        if (bonus.top > 0) message += `🏆 Top Shooter / Most Points: $${bonus.top.toLocaleString()}\n`;
         if (bonus.parachute > 0) message += `🪂 Parachute: $${bonus.parachute.toLocaleString()}\n`;
         if (bonus.attendance > 0) message += `👥 Attendance: $${bonus.attendance.toLocaleString()}\n`;
         message += `❌ Kill bonus on loss: ${bonus.killOnLoss ? "Yes" : "No"}\n\n`;
     }
-    message += "⚠️ Self-kill: no bonus for that kill + one additional kill bonus removed.";
+    message += "⚠️ **Self-kill Rule:** No bonus for that kill + 1 additional kill bonus removed.";
     await interaction.reply({ content: message });
 }
 
@@ -241,20 +301,47 @@ async function calculateBonus(interaction) {
     const parachutes = interaction.options.getInteger("parachutes");
     const selfKills = interaction.options.getInteger("selfkills");
     const attended = interaction.options.getBoolean("attended");
+    const targetMember = interaction.options.getUser("member");
 
     let total = 0;
+
+    // Kills Payout Rule (No kill bonus on loss unless killOnLoss is set)
     if (won || bonus.killOnLoss) {
         let validKills = Math.max(0, kills - selfKills - selfKills);
         total += validKills * bonus.kill;
     }
+
     if (alive) total += bonus.alive;
     if (top) total += bonus.top;
     total += parachutes * bonus.parachute;
     if (attended) total += bonus.attendance;
 
-    await interaction.reply({
-        content: `## 💰 Bonus Calculation\n\n**Event:** ${eventName}\n**Kills:** ${kills}\n**Self-kills:** ${selfKills}\n**Won:** ${won ? "Yes" : "No"}\n**Alive:** ${alive ? "Yes" : "No"}\n**Top player:** ${top ? "Yes" : "No"}\n**Parachutes:** ${parachutes}\n**Attended:** ${attended ? "Yes" : "No"}\n\n### 💵 Total Bonus: **$${total.toLocaleString()}**`
-    });
+    let responseText = `## 💵 Payout & Bonus Calculation\n\n` +
+        `**Event:** ${eventName}\n` +
+        `**Kills:** ${kills}\n` +
+        `**Self-kills:** ${selfKills}\n` +
+        `**Won:** ${won ? "Yes" : "No"}\n` +
+        `**Alive at End:** ${alive ? "Yes" : "No"}\n` +
+        `**Top Shooter / Most Points:** ${top ? "Yes" : "No"}\n` +
+        `**Parachutes:** ${parachutes}\n` +
+        `**Attended:** ${attended ? "Yes" : "No"}\n\n` +
+        `### 💰 Calculated Event Payout: **$${total.toLocaleString()}**`;
+
+    if (targetMember) {
+        if (!isModerator(interaction)) {
+            return interaction.reply({ content: "❌ Only moderators can credit payouts directly to a member.", flags: MessageFlags.Ephemeral });
+        }
+        if (!data.payouts[targetMember.id]) {
+            data.payouts[targetMember.id] = { username: targetMember.username, amount: 0 };
+        }
+        data.payouts[targetMember.id].amount += total;
+        data.payouts[targetMember.id].username = targetMember.username;
+        saveData(data);
+
+        responseText += `\n\n✅ Credited **$${total.toLocaleString()}** to ${targetMember}! New Balance: **$${data.payouts[targetMember.id].amount.toLocaleString()}**`;
+    }
+
+    await interaction.reply({ content: responseText });
 }
 
 client.on("interactionCreate", async interaction => {
@@ -263,25 +350,109 @@ client.on("interactionCreate", async interaction => {
     const command = interaction.commandName;
 
     try {
-        const managementCommands = [
+        const modOnlyCommands = [
             "add-event", "edit-event", "remove-event", "set-bonus", "remove-bonus", 
-            "submit-result", "edit-result"
+            "submit-result", "edit-result", "add-payout", "set-payout", "edit-family-balance"
         ];
 
-        if (managementCommands.includes(command)) {
-            if (!isModerator(interaction)) {
-                return interaction.reply({
-                    content: `❌ You need one of the moderator roles to use this command.`,
-                    flags: MessageFlags.Ephemeral
-                });
-            }
+        if (modOnlyCommands.includes(command) && !isModerator(interaction)) {
+            return interaction.reply({
+                content: `❌ You need one of the moderator roles to use this command.`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+
+        /* --- CHANNEL ISOLATION CHECKS --- */
+
+        // 1. FAMILY BALANCE CHANNEL RESTRICTION (┇・family-balance-logs)
+        const familyBalanceCommands = ["family-balance", "edit-family-balance"];
+        if (familyBalanceCommands.includes(command) && !isFamilyBalanceChannel(interaction)) {
+            return interaction.reply({
+                content: `❌ This command can only be used in <#${FAMILY_BALANCE_CHANNEL_ID}>.`,
+                flags: MessageFlags.Ephemeral
+            });
+        }
+
+        // 2. BONUS & PAYOUT LOGS CHANNEL RESTRICTION (〣💸・bonus-logs)
+        const bonusLogCommands = ["payout", "all-payouts", "add-payout", "set-payout", "calculate-bonus"];
+        if (bonusLogCommands.includes(command) && !isBonusLogChannel(interaction)) {
+            return interaction.reply({
+                content: `❌ This command can only be used in <#${BONUS_LOG_CHANNEL_ID}>.`,
+                flags: MessageFlags.Ephemeral
+            });
         }
 
         if (command === "events") return await showEvents(interaction);
         if (command === "bonuses") return await showBonuses(interaction);
         if (command === "calculate-bonus") return await calculateBonus(interaction);
 
-        /* --- SUBMIT RESULT --- */
+        /* --- FAMILY BALANCE LOGS COMMANDS --- */
+
+        if (command === "family-balance") {
+            return interaction.reply({
+                content: `🏦 **Current Family Balance:** $${data.familyBalance.toLocaleString()}`
+            });
+        }
+
+        if (command === "edit-family-balance") {
+            const action = interaction.options.getString("action");
+            const amount = interaction.options.getInteger("amount");
+
+            if (action === "add") data.familyBalance += amount;
+            else if (action === "subtract") data.familyBalance = Math.max(0, data.familyBalance - amount);
+            else if (action === "set") data.familyBalance = amount;
+
+            saveData(data);
+            return interaction.reply(`🏛️ Family Balance updated! New Total: **$${data.familyBalance.toLocaleString()}**`);
+        }
+
+        /* --- PAYOUT COMMANDS --- */
+
+        if (command === "payout") {
+            const member = interaction.options.getUser("member") || interaction.user;
+            const userPayout = data.payouts[member.id]?.amount || 0;
+            return interaction.reply({
+                content: `💵 **Total Payout Balance for ${member}:** $${userPayout.toLocaleString()}`
+            });
+        }
+
+        if (command === "all-payouts") {
+            if (Object.keys(data.payouts).length === 0) {
+                return interaction.reply({ content: "ℹ️ No member payouts recorded yet." });
+            }
+            let list = "## 📜 Family Member Payout Balances\n\n";
+            for (const [id, info] of Object.entries(data.payouts)) {
+                list += `• <@${id}> (${info.username}): **$${info.amount.toLocaleString()}**\n`;
+            }
+            return interaction.reply({ content: list });
+        }
+
+        if (command === "add-payout") {
+            const member = interaction.options.getUser("member");
+            const amount = interaction.options.getInteger("amount");
+
+            if (!data.payouts[member.id]) {
+                data.payouts[member.id] = { username: member.username, amount: 0 };
+            }
+            data.payouts[member.id].amount += amount;
+            data.payouts[member.id].username = member.username;
+            saveData(data);
+
+            return interaction.reply(`✅ Added **$${amount.toLocaleString()}** to ${member}'s payout. Total: **$${data.payouts[member.id].amount.toLocaleString()}**`);
+        }
+
+        if (command === "set-payout") {
+            const member = interaction.options.getUser("member");
+            const amount = interaction.options.getInteger("amount");
+
+            data.payouts[member.id] = { username: member.username, amount: amount };
+            saveData(data);
+
+            return interaction.reply(`✅ Set ${member}'s total payout balance to **$${amount.toLocaleString()}**`);
+        }
+
+        /* --- EVENT RESULT SUBMISSIONS (EVENT LOGS CHANNEL) --- */
+
         if (command === "submit-result") {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -302,8 +473,6 @@ client.on("interactionCreate", async interaction => {
             }
 
             const messageContent = `🏆 ${event}\n${status}\n${statsFormatted.trim()}`;
-            
-            // TARGETS EVENT_LOG_CHANNEL_ID
             const channel = await client.channels.fetch(EVENT_LOG_CHANNEL_ID).catch(() => null);
 
             if (!channel) {
@@ -314,7 +483,6 @@ client.on("interactionCreate", async interaction => {
             return interaction.editReply({ content: "✅ Result submitted successfully." });
         }
 
-        /* --- EDIT RESULT --- */
         if (command === "edit-result") {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -324,7 +492,6 @@ client.on("interactionCreate", async interaction => {
             const stats = interaction.options.getString("stats");
             const screenshot = interaction.options.getAttachment("screenshot");
 
-            // TARGETS EVENT_LOG_CHANNEL_ID
             const channel = await client.channels.fetch(EVENT_LOG_CHANNEL_ID).catch(() => null);
             if (!channel) {
                 return interaction.editReply({ content: "❌ Event Log channel not found. Check EVENT_LOG_CHANNEL_ID in .env file." });
@@ -334,7 +501,7 @@ client.on("interactionCreate", async interaction => {
             try {
                 targetMessage = await channel.messages.fetch(messageId);
             } catch (error) {
-                return interaction.editReply({ content: "❌ Could not find that message in the event-logs channel. Verify the message ID." });
+                return interaction.editReply({ content: "❌ Could not find that message in event-logs channel. Verify the message ID." });
             }
 
             let newContent = targetMessage.content;
@@ -372,6 +539,8 @@ client.on("interactionCreate", async interaction => {
             await targetMessage.edit(payload);
             return interaction.editReply({ content: "✅ Result updated successfully." });
         }
+
+        /* --- MANAGEMENT COMMANDS --- */
 
         if (command === "add-event") {
             const name = interaction.options.getString("name");
@@ -443,7 +612,7 @@ client.on("interactionCreate", async interaction => {
 
         let errorText = "❌ There was an error processing this command.";
         if (error.code === 50013) {
-            errorText = "❌ **Missing Permissions**: The bot lacks permission to post or attach files in the log channel. Check channel settings in Discord.";
+            errorText = "❌ **Missing Permissions**: Check bot channel permissions.";
         }
 
         if (interaction.deferred) {
@@ -485,7 +654,6 @@ cron.schedule(
         const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
         if (!role) return;
 
-        // TARGETS ANNOUNCEMENT EVENT_CHANNEL_ID FOR CRON PINGS
         const channel = guild.channels.cache.get(EVENT_CHANNEL_ID);
         if (!channel) return;
         if (!channel.isTextBased() || !channel.permissionsFor(client.user).has("SendMessages")) return;
@@ -536,8 +704,6 @@ client.once("clientReady", async () => {
     console.log(`🌏 Timezone: Asia/Kolkata`);
     console.log(`🔔 Event role: ${BADMASH_ROLE}`);
     console.log(`🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`);
-    console.log(`📢 Announcement Channel: ${EVENT_CHANNEL_ID}`);
-    console.log(`📋 Log Channel: ${EVENT_LOG_CHANNEL_ID}`);
     
     await registerCommands();
 });
