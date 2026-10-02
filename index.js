@@ -429,12 +429,11 @@ client.on("interactionCreate", async interaction => {
         }
 
     } catch (error) {
-        console.error(error);
-        if (!interaction.replied) {
-            await interaction.reply({ content: "❌ Something went wrong. Check the bot console.", ephemeral: true });
-        }
+    console.error(error);
+    await interaction.editReply({ content: 'There was an error processing this command.' });
+}
     }
-});
+);
 
 /* =========================
    AUTOMATIC EVENT SCHEDULER
