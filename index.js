@@ -137,7 +137,6 @@ const commands = [
         .addIntegerOption(option => option.setName("selfkills").setDescription("Number of self-kills").setRequired(true).setMinValue(0))
         .addBooleanOption(option => option.setName("attended").setDescription("Attended the event?").setRequired(true)),
 
-    /* --- NEW COMMANDS --- */
     new SlashCommandBuilder()
         .setName("submit-result")
         .setDescription("Submit event logs with kills and screenshot")
@@ -177,7 +176,7 @@ async function registerCommands() {
 }
 
 /* =========================
-   EVENTS DISPLAY
+   EVENTS DISPLAY HELPERS
 ========================= */
 
 function formatTime(time) {
@@ -196,7 +195,7 @@ function formatDays(days) {
 }
 
 /* =========================
-   COMMAND HANDLER
+   COMMAND HANDLERS
 ========================= */
 
 async function showEvents(interaction) {
@@ -260,11 +259,6 @@ client.on("interactionCreate", async interaction => {
     const command = interaction.commandName;
 
     try {
-        if (command === "events") return showEvents(interaction);
-        if (command === "bonuses") return showBonuses(interaction);
-        if (command === "calculate-bonus") return calculateBonus(interaction);
-
-        /* Moderator checks */
         const managementCommands = [
             "add-event", "edit-event", "remove-event", "set-bonus", "remove-bonus", 
             "submit-result", "edit-result"
@@ -279,14 +273,19 @@ client.on("interactionCreate", async interaction => {
             }
         }
 
-        /* LOGGING COMMANDS */
+        if (command === "events") return await showEvents(interaction);
+        if (command === "bonuses") return await showBonuses(interaction);
+        if (command === "calculate-bonus") return await calculateBonus(interaction);
+
+        /* --- SUBMIT RESULT --- */
         if (command === "submit-result") {
+            await interaction.deferReply({ ephemeral: true });
+
             const event = interaction.options.getString("event");
             const status = interaction.options.getString("status");
             const stats = interaction.options.getString("stats");
             const screenshot = interaction.options.getAttachment("screenshot");
 
-            // Format stats input like "@player 5, @player2 3" into your layout
             let statsFormatted = "Member\nKills\n";
             const statPairs = stats.split(",");
             for (let pair of statPairs) {
@@ -299,70 +298,74 @@ client.on("interactionCreate", async interaction => {
             }
 
             const messageContent = `🏆 ${event}\n${status}\n${statsFormatted.trim()}`;
-            const channel = client.channels.cache.get(EVENT_CHANNEL_ID);
-            
-            if (!channel) return interaction.reply({ content: "❌ Event channel not found.", ephemeral: true });
+            const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
 
-            await interaction.deferReply({ ephemeral: true });
+            if (!channel) {
+                return interaction.editReply({ content: "❌ Event channel not found or bot lacks permission to access it." });
+            }
+
             await channel.send({ content: messageContent, files: [screenshot.url] });
             return interaction.editReply({ content: "✅ Result submitted successfully." });
         }
 
+        /* --- EDIT RESULT --- */
         if (command === "edit-result") {
+            await interaction.deferReply({ ephemeral: true });
+
             const messageId = interaction.options.getString("message_id");
             const event = interaction.options.getString("event");
             const status = interaction.options.getString("status");
             const stats = interaction.options.getString("stats");
             const screenshot = interaction.options.getAttachment("screenshot");
 
-            const channel = client.channels.cache.get(EVENT_CHANNEL_ID);
-            if (!channel) return interaction.reply({ content: "❌ Event channel not found.", ephemeral: true });
+            const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
+            if (!channel) {
+                return interaction.editReply({ content: "❌ Event channel not found or bot lacks permission to access it." });
+            }
 
-            await interaction.deferReply({ ephemeral: true });
-
+            let targetMessage;
             try {
-                const targetMessage = await channel.messages.fetch(messageId);
-                let newContent = targetMessage.content;
+                targetMessage = await channel.messages.fetch(messageId);
+            } catch (error) {
+                return interaction.editReply({ content: "❌ Could not find that message in the event-logs channel. Verify the message ID." });
+            }
 
-                // Rebuild the message ONLY with the items we want to change
-                if (event || status || stats) {
-                    const lines = targetMessage.content.split("\n");
-                    const currentEvent = lines[0] ? lines[0].replace("🏆 ", "") : "";
-                    const currentStatus = lines[1] || "";
-                    const currentStats = lines.slice(2).join("\n"); // "Member\nKills\n..."
+            let newContent = targetMessage.content;
 
-                    const newEvent = event || currentEvent;
-                    const newStatus = status || currentStatus;
-                    let newStatsFormatted = currentStats;
+            if (event || status || stats) {
+                const lines = targetMessage.content.split("\n");
+                const currentEvent = lines[0] ? lines[0].replace("🏆 ", "") : "";
+                const currentStatus = lines[1] || "";
+                const currentStats = lines.slice(2).join("\n");
 
-                    if (stats) {
-                        newStatsFormatted = "Member\nKills\n";
-                        const statPairs = stats.split(",");
-                        for (let pair of statPairs) {
-                            const parts = pair.trim().split(/\s+/);
-                            if (parts.length >= 2) {
-                                const kills = parts.pop();
-                                const member = parts.join(" ");
-                                newStatsFormatted += `${member}\n${kills}\n`;
-                            }
+                const newEvent = event || currentEvent;
+                const newStatus = status || currentStatus;
+                let newStatsFormatted = currentStats;
+
+                if (stats) {
+                    newStatsFormatted = "Member\nKills\n";
+                    const statPairs = stats.split(",");
+                    for (let pair of statPairs) {
+                        const parts = pair.trim().split(/\s+/);
+                        if (parts.length >= 2) {
+                            const kills = parts.pop();
+                            const member = parts.join(" ");
+                            newStatsFormatted += `${member}\n${kills}\n`;
                         }
-                        newStatsFormatted = newStatsFormatted.trim();
                     }
-
-                    newContent = `🏆 ${newEvent}\n${newStatus}\n${newStatsFormatted}`;
+                    newStatsFormatted = newStatsFormatted.trim();
                 }
 
-                const payload = { content: newContent };
-                if (screenshot) payload.files = [screenshot.url]; // Will replace old attachments
-
-                await targetMessage.edit(payload);
-                return interaction.editReply({ content: "✅ Result updated successfully." });
-            } catch (error) {
-                return interaction.editReply({ content: "❌ Could not find or edit that message. Ensure the message ID is correct and is inside the event-logs channel." });
+                newContent = `🏆 ${newEvent}\n${newStatus}\n${newStatsFormatted}`;
             }
+
+            const payload = { content: newContent };
+            if (screenshot) payload.files = [screenshot.url];
+
+            await targetMessage.edit(payload);
+            return interaction.editReply({ content: "✅ Result updated successfully." });
         }
 
-        /* EXISTING MANAGEMENT COMMANDS */
         if (command === "add-event") {
             const name = interaction.options.getString("name");
             const timesString = interaction.options.getString("times");
@@ -429,11 +432,16 @@ client.on("interactionCreate", async interaction => {
         }
 
     } catch (error) {
-    console.error(error);
-    await interaction.editReply({ content: 'There was an error processing this command.' });
-}
+        console.error("Command Execution Error:", error);
+        if (interaction.deferred) {
+            await interaction.editReply({ content: "❌ There was an error processing this command." }).catch(() => {});
+        } else if (interaction.replied) {
+            await interaction.followUp({ content: "❌ There was an error processing this command.", ephemeral: true }).catch(() => {});
+        } else {
+            await interaction.reply({ content: "❌ There was an error processing this command.", ephemeral: true }).catch(() => {});
+        }
     }
-);
+});
 
 /* =========================
    AUTOMATIC EVENT SCHEDULER
