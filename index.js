@@ -37,7 +37,7 @@ const client = new Client({
 });
 
 /* =========================
-   UPDATED PAYOUT POLICY
+   DEFAULT CONFIGURATIONS
 ========================= */
 
 const DEFAULT_BONUSES = {
@@ -46,6 +46,15 @@ const DEFAULT_BONUSES = {
     "Weapons Factory": { kill: 3000, alive: 0, top: 10000, parachute: 2000, attendance: 0, killOnLoss: false },
     "Biz War": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
     "Clan Raid": { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 2500, killOnLoss: false }
+};
+
+// Default events to populate if data.json is missing or empty
+const DEFAULT_EVENTS = {
+    "Cartel War": { times: ["15:00", "21:00"], days: null },
+    "Crown Holder": { times: ["18:00"], days: null },
+    "Weapons Factory": { times: ["13:00", "19:00"], days: null },
+    "Biz War": { times: ["14:00", "20:00"], days: null },
+    "Clan Raid": { times: ["17:00"], days: null }
 };
 
 /* =========================
@@ -79,14 +88,18 @@ function parseTimeToMinutes(timeStr) {
 
 function loadData() {
     let initialData = {
-        events: {},
+        events: DEFAULT_EVENTS,
         bonuses: DEFAULT_BONUSES,
         familyBalance: 0,
         payouts: {}
     };
 
     if (!fs.existsSync(DATA_FILE)) {
-        fs.writeFileSync(DATA_FILE, JSON.stringify(initialData, null, 2));
+        try {
+            fs.writeFileSync(DATA_FILE, JSON.stringify(initialData, null, 2));
+        } catch (err) {
+            console.error("Could not write initial data.json:", err);
+        }
         return initialData;
     }
 
@@ -95,16 +108,18 @@ function loadData() {
         fileData.bonuses = DEFAULT_BONUSES;
         if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
         if (!fileData.payouts) fileData.payouts = {};
-        if (!fileData.events) fileData.events = {};
+        if (!fileData.events || Object.keys(fileData.events).length === 0) {
+            fileData.events = DEFAULT_EVENTS;
+        }
 
-        // Repair/Normalize payouts (handles raw numbers vs objects)
+        // Repair payouts (handles raw numbers vs objects)
         for (const [id, val] of Object.entries(fileData.payouts)) {
             if (typeof val === "number") {
                 fileData.payouts[id] = { amount: val };
             }
         }
 
-        // Repair/Normalize events (handles raw time arrays vs event objects)
+        // Repair events (handles raw time arrays vs event objects)
         for (const [name, val] of Object.entries(fileData.events)) {
             if (Array.isArray(val)) {
                 fileData.events[name] = { times: val, days: null };
@@ -113,13 +128,17 @@ function loadData() {
 
         return fileData;
     } catch (err) {
-        console.error("Error reading data.json, preserving structure:", err);
+        console.error("Error reading data.json, falling back to defaults:", err);
         return initialData;
     }
 }
 
 function saveData(data) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    try {
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+    } catch (err) {
+        console.error("Failed to save data.json:", err);
+    }
 }
 
 let data = loadData();
@@ -257,8 +276,6 @@ const commands = [
         .addStringOption(option => option.setName("stats").setDescription("Format: @User 5, @User 3").setRequired(false))
         .addAttachmentOption(option => option.setName("screenshot").setDescription("New screenshot (replaces old)").setRequired(false)),
 
-    /* --- PAYOUT COMMANDS (BONUS LOGS CHANNEL) --- */
-
     new SlashCommandBuilder()
         .setName("payout")
         .setDescription("Check personal total accumulated payout or another member's payout")
@@ -278,8 +295,6 @@ const commands = [
         ))
         .addUserOption(option => option.setName("member").setDescription("Member").setRequired(true))
         .addIntegerOption(option => option.setName("amount").setDescription("Amount").setRequired(true).setMinValue(0)),
-
-    /* --- FAMILY BALANCE COMMANDS (FAMILY BALANCE LOGS CHANNEL) --- */
 
     new SlashCommandBuilder()
         .setName("family-balance")
@@ -321,7 +336,7 @@ async function registerCommands() {
 
 async function showEvents(interaction) {
     if (!data.events || Object.keys(data.events).length === 0) {
-        return await interaction.reply({ content: "ℹ️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
+        return await interaction.reply({ content: "ℹ️️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
     }
     let message = "## 📅 Event Schedule\n\n";
     for (const [name, event] of Object.entries(data.events)) {
@@ -367,8 +382,6 @@ client.on("interactionCreate", async interaction => {
             });
         }
 
-        /* --- CHANNEL ISOLATION CHECKS --- */
-
         const familyBalanceCommands = ["family-balance", "edit-family-balance"];
         if (familyBalanceCommands.includes(command) && !isFamilyBalanceChannel(interaction)) {
             return interaction.reply({
@@ -388,8 +401,6 @@ client.on("interactionCreate", async interaction => {
         if (command === "events") return await showEvents(interaction);
         if (command === "bonuses") return await showBonuses(interaction);
 
-        /* --- FAMILY BALANCE COMMANDS --- */
-
         if (command === "family-balance") {
             return interaction.reply({
                 content: `🏦 **Current Family Balance:** $${data.familyBalance.toLocaleString()}`
@@ -407,8 +418,6 @@ client.on("interactionCreate", async interaction => {
             saveData(data);
             return interaction.reply(`🏛️ Family Balance updated (${action})! New Total: **$${data.familyBalance.toLocaleString()}**`);
         }
-
-        /* --- PAYOUT COMMANDS --- */
 
         if (command === "payout") {
             await interaction.deferReply();
@@ -466,8 +475,6 @@ client.on("interactionCreate", async interaction => {
 
             return interaction.editReply(`✅ Updated ${member}'s payout balance (${action}). New Total: **$${currentAmount.toLocaleString()}**`);
         }
-
-        /* --- EVENT RESULT SUBMISSIONS --- */
 
         if (command === "submit-result") {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -583,8 +590,6 @@ client.on("interactionCreate", async interaction => {
             return interaction.editReply({ content: "✅ Result log updated successfully." });
         }
 
-        /* --- MANAGEMENT COMMANDS --- */
-
         if (command === "add-event") {
             const name = interaction.options.getString("name");
             const timesString = interaction.options.getString("times");
@@ -623,7 +628,7 @@ client.on("interactionCreate", async interaction => {
             }
             delete data.events[name];
             saveData(data);
-            return interaction.reply(`🗑️️ Event **${name}** removed.`);
+            return interaction.reply(`🗑 Event **${name}** removed.`);
         }
 
     } catch (error) {
@@ -702,10 +707,7 @@ cron.schedule(
                     let difference = eventMinutes - currentTotal;
                     if (difference < 0) difference += 24 * 60;
 
-                    if (eventName === "Cartel War") {
-                        if (difference !== 0) continue;
-                    }
-
+                    // Trigger at 15m warning, 10m warning, or exact start time
                     if (difference !== 15 && difference !== 10 && difference !== 0) continue;
 
                     if (days && Array.isArray(days) && days.length > 0) {
@@ -736,7 +738,7 @@ cron.schedule(
    BOT READY
 ========================= */
 
-client.once("clientReady", async () => {
+client.once("ready", async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     console.log(`🌏 Timezone: Asia/Kolkata`);
     console.log(`🔔 Event role: ${BADMASH_ROLE}`);
