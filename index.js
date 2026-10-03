@@ -578,87 +578,111 @@ client.on("interactionCreate", async interaction => {
 });
 
 /* =========================
-   AUTOMATIC EVENT SCHEDULER
+   AUTOMATIC EVENT SCHEDULER (WITH DIAGNOSTIC LOGS)
 ========================= */
 
 cron.schedule(
     "* * * * *",
     async () => {
-        const now = new Date();
-        const formatter = new Intl.DateTimeFormat("en-GB", {
-            timeZone: "Asia/Kolkata",
-            year: "numeric", month: "2-digit", day: "2-digit",
-            hour: "2-digit", minute: "2-digit",
-            weekday: "short", hour12: false
-        });
-
-        const parts = formatter.formatToParts(now);
-        const getPart = type => parts.find(p => p.type === type)?.value;
-
-        const currentHour = parseInt(getPart("hour"));
-        const currentMinute = parseInt(getPart("minute"));
-        const weekdayNumbers = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-        const currentDay = weekdayNumbers[getPart("weekday")];
-
-        const guild = client.guilds.cache.get(GUILD_ID);
-        if (!guild) return;
-
-        const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
-        if (!role) return;
-
-        const channel = guild.channels.cache.get(EVENT_CHANNEL_ID);
-        if (!channel) return;
-        if (!channel.isTextBased() || !channel.permissionsFor(client.user).has("SendMessages")) return;
-
-        function getTimeDifference(eventTime) {
-            const [eventHour, eventMinute] = eventTime.split(":").map(Number);
-            let currentTotal = currentHour * 60 + currentMinute;
-            let eventTotal = eventHour * 60 + eventMinute;
-            let difference = eventTotal - currentTotal;
-            if (difference < 0) difference += 24 * 60;
-            return difference;
-        }
-
-        for (const [eventName, event] of Object.entries(data.events)) {
-            for (const eventTime of event.times) {
-                const difference = getTimeDifference(eventTime);
-
-                if (eventName === "Cartel War") {
-                    if (difference !== 0) continue;
-                }
-
-                if (difference !== 15 && difference !== 10 && difference !== 0) continue;
-                if (event.days) {
-                    if (!event.days.includes(currentDay)) continue;
-                }
-
-                let message;
-                if (difference === 15) {
-                    message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${role}\nGet ready!`;
-                } else if (difference === 10) {
-                    message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${role}\nGet ready!`;
-                } else {
-                    message = `🔔 **${eventName}** is starting now!\n\n${role}\nGet ready!`;
-                }
-                await channel.send(message);
+        try {
+            // Check if events exist in data.json
+            if (!data.events || Object.keys(data.events).length === 0) {
+                return; // Silent return if no events are configured
             }
+
+            const now = new Date();
+            const formatter = new Intl.DateTimeFormat("en-GB", {
+                timeZone: "Asia/Kolkata",
+                year: "numeric", month: "2-digit", day: "2-digit",
+                hour: "2-digit", minute: "2-digit",
+                weekday: "short", hour12: false
+            });
+
+            const parts = formatter.formatToParts(now);
+            const getPart = type => parts.find(p => p.type === type)?.value;
+
+            const currentHour = parseInt(getPart("hour"));
+            const currentMinute = parseInt(getPart("minute"));
+            const weekdayNumbers = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+            const currentDay = weekdayNumbers[getPart("weekday")];
+
+            // 1. Fetch Guild
+            const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID).catch(() => null);
+            if (!guild) {
+                console.error(`[Cron Error] Guild ID '${GUILD_ID}' not found.`);
+                return;
+            }
+
+            // 2. Fetch Role
+            const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
+            if (!role) {
+                console.error(`[Cron Error] Role '${BADMASH_ROLE}' not found in server.`);
+                return;
+            }
+
+            // 3. Fetch Event Channel
+            const channel = guild.channels.cache.get(EVENT_CHANNEL_ID) || await guild.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
+            if (!channel) {
+                console.error(`[Cron Error] Channel ID '${EVENT_CHANNEL_ID}' not found.`);
+                return;
+            }
+
+            if (!channel.isTextBased()) {
+                console.error(`[Cron Error] Channel ID '${EVENT_CHANNEL_ID}' is not a text channel.`);
+                return;
+            }
+
+            const permissions = channel.permissionsFor(client.user);
+            if (!permissions || !permissions.has("SendMessages")) {
+                console.error(`[Cron Error] Bot missing 'Send Messages' permission in channel '${EVENT_CHANNEL_ID}'.`);
+                return;
+            }
+
+            function getTimeDifference(eventTime) {
+                const [eventHour, eventMinute] = eventTime.split(":").map(Number);
+                let currentTotal = currentHour * 60 + currentMinute;
+                let eventTotal = eventHour * 60 + eventMinute;
+                let difference = eventTotal - currentTotal;
+                if (difference < 0) difference += 24 * 60;
+                return difference;
+            }
+
+            // 4. Iterate and Trigger Announcements
+            for (const [eventName, event] of Object.entries(data.events)) {
+                if (!event.times || !Array.isArray(event.times)) continue;
+
+                for (const eventTime of event.times) {
+                    const difference = getTimeDifference(eventTime);
+
+                    if (eventName === "Cartel War") {
+                        if (difference !== 0) continue;
+                    }
+
+                    if (difference !== 15 && difference !== 10 && difference !== 0) continue;
+
+                    if (event.days && Array.isArray(event.days) && event.days.length > 0) {
+                        if (!event.days.includes(currentDay)) continue;
+                    }
+
+                    let message;
+                    if (difference === 15) {
+                        message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${role}\nGet ready!`;
+                    } else if (difference === 10) {
+                        message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${role}\nGet ready!`;
+                    } else {
+                        message = `🔔 **${eventName}** is starting now!\n\n${role}\nGet ready!`;
+                    }
+
+                    await channel.send(message);
+                    console.log(`✅ [Cron] Announced ${eventName} (${difference} min trigger) in channel.`);
+                }
+            }
+        } catch (error) {
+            console.error("[Cron System Error]:", error);
         }
     },
     { timezone: "Asia/Kolkata" }
 );
-
-/* =========================
-   BOT READY
-========================= */
-
-client.once("clientReady", async () => {
-    console.log(`✅ Logged in as ${client.user.tag}`);
-    console.log(`🌏 Timezone: Asia/Kolkata`);
-    console.log(`🔔 Event role: ${BADMASH_ROLE}`);
-    console.log(`🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`);
-    
-    await registerCommands();
-});
 
 /* =========================
    LOGIN
