@@ -25,7 +25,7 @@ const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
     "Discord Moderator 🛠",
-    "❤‍🔥CO Leader"
+    "❤‍‍🔥CO Leader"
 ];
 
 const DATA_FILE = "./data.json";
@@ -48,7 +48,6 @@ const DEFAULT_BONUSES = {
     "Clan Raid": { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 2500, killOnLoss: false }
 };
 
-// Default events to populate if data.json is missing or empty
 const DEFAULT_EVENTS = {
     "Cartel War": { times: ["15:00", "21:00"], days: null },
     "Crown Holder": { times: ["18:00"], days: null },
@@ -58,7 +57,7 @@ const DEFAULT_EVENTS = {
 };
 
 /* =========================
-   TIME PARSER HELPER (12h & 24h Safe)
+   TIME PARSER HELPER
 ========================= */
 
 function parseTimeToMinutes(timeStr) {
@@ -108,18 +107,21 @@ function loadData() {
         fileData.bonuses = DEFAULT_BONUSES;
         if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
         if (!fileData.payouts) fileData.payouts = {};
+
+        // Force populate default events if empty or missing
         if (!fileData.events || Object.keys(fileData.events).length === 0) {
             fileData.events = DEFAULT_EVENTS;
+            fs.writeFileSync(DATA_FILE, JSON.stringify(fileData, null, 2));
         }
 
-        // Repair payouts (handles raw numbers vs objects)
+        // Normalize payouts
         for (const [id, val] of Object.entries(fileData.payouts)) {
             if (typeof val === "number") {
                 fileData.payouts[id] = { amount: val };
             }
         }
 
-        // Repair events (handles raw time arrays vs event objects)
+        // Normalize events
         for (const [name, val] of Object.entries(fileData.events)) {
             if (Array.isArray(val)) {
                 fileData.events[name] = { times: val, days: null };
@@ -201,6 +203,10 @@ const commands = [
     new SlashCommandBuilder()
         .setName("bonuses")
         .setDescription("Show payout policy rate for each event"),
+
+    new SlashCommandBuilder()
+        .setName("test-ping")
+        .setDescription("Send a test ping message to the event channel to verify setup (Mod only)"),
 
     new SlashCommandBuilder()
         .setName("add-event")
@@ -336,7 +342,7 @@ async function registerCommands() {
 
 async function showEvents(interaction) {
     if (!data.events || Object.keys(data.events).length === 0) {
-        return await interaction.reply({ content: "ℹ️️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
+        return await interaction.reply({ content: "ℹ️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
     }
     let message = "## 📅 Event Schedule\n\n";
     for (const [name, event] of Object.entries(data.events)) {
@@ -372,7 +378,7 @@ client.on("interactionCreate", async interaction => {
     try {
         const modOnlyCommands = [
             "add-event", "edit-event", "remove-event", 
-            "submit-result", "edit-result", "edit-payout", "edit-family-balance"
+            "submit-result", "edit-result", "edit-payout", "edit-family-balance", "test-ping"
         ];
 
         if (modOnlyCommands.includes(command) && !isModerator(interaction)) {
@@ -400,6 +406,22 @@ client.on("interactionCreate", async interaction => {
 
         if (command === "events") return await showEvents(interaction);
         if (command === "bonuses") return await showBonuses(interaction);
+
+        if (command === "test-ping") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+            const channel = await client.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
+            if (!channel || !channel.isTextBased()) {
+                return interaction.editReply(`❌ Could not fetch channel \`${EVENT_CHANNEL_ID}\`. Check EVENT_CHANNEL_ID in .env file.`);
+            }
+
+            const guild = interaction.guild;
+            const role = guild.roles.cache.find(r => r.name.trim().toLowerCase() === BADMASH_ROLE.trim().toLowerCase());
+            const rolePing = role ? `${role}` : `@${BADMASH_ROLE} (Role not found by exact name)`;
+
+            await channel.send(`🧪 **Test Announcement Ping**\n\n${rolePing}\nIf you see this, channel permissions & notifications are working!`);
+            return interaction.editReply(`✅ Test message sent to <#${EVENT_CHANNEL_ID}>!`);
+        }
 
         if (command === "family-balance") {
             return interaction.reply({
@@ -670,8 +692,8 @@ cron.schedule(
             const parts = formatter.formatToParts(now);
             const getPart = type => parts.find(p => p.type === type)?.value;
 
-            const currentHour = parseInt(getPart("hour"));
-            const currentMinute = parseInt(getPart("minute"));
+            const currentHour = parseInt(getPart("hour"), 10);
+            const currentMinute = parseInt(getPart("minute"), 10);
             const weekdayNumbers = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
             const currentDay = weekdayNumbers[getPart("weekday")];
             const currentTotal = currentHour * 60 + currentMinute;
@@ -682,17 +704,14 @@ cron.schedule(
                 return;
             }
 
-            const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
-            if (!role) {
-                console.error(`[Cron Error] Role '${BADMASH_ROLE}' not found.`);
-                return;
-            }
-
             const channel = guild.channels.cache.get(EVENT_CHANNEL_ID) || await guild.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
             if (!channel || !channel.isTextBased()) {
                 console.error(`[Cron Error] Valid text channel '${EVENT_CHANNEL_ID}' not found.`);
                 return;
             }
+
+            const role = guild.roles.cache.find(r => r.name.trim().toLowerCase() === BADMASH_ROLE.trim().toLowerCase());
+            const roleMention = role ? `${role}` : `@${BADMASH_ROLE}`;
 
             for (const [eventName, event] of Object.entries(data.events)) {
                 const times = Array.isArray(event) ? event : event?.times;
@@ -707,7 +726,6 @@ cron.schedule(
                     let difference = eventMinutes - currentTotal;
                     if (difference < 0) difference += 24 * 60;
 
-                    // Trigger at 15m warning, 10m warning, or exact start time
                     if (difference !== 15 && difference !== 10 && difference !== 0) continue;
 
                     if (days && Array.isArray(days) && days.length > 0) {
@@ -716,11 +734,11 @@ cron.schedule(
 
                     let message;
                     if (difference === 15) {
-                        message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${role}\nGet ready!`;
+                        message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${roleMention}\nGet ready!`;
                     } else if (difference === 10) {
-                        message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${role}\nGet ready!`;
+                        message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${roleMention}\nGet ready!`;
                     } else {
-                        message = `🔔 **${eventName}** is starting now!\n\n${role}\nGet ready!`;
+                        message = `🔔 **${eventName}** is starting now!\n\n${roleMention}\nGet ready!`;
                     }
 
                     await channel.send(message);
@@ -738,11 +756,12 @@ cron.schedule(
    BOT READY
 ========================= */
 
-client.once("ready", async () => {
+client.once("clientReady", async () => {
     console.log(`✅ Logged in as ${client.user.tag}`);
     console.log(`🌏 Timezone: Asia/Kolkata`);
     console.log(`🔔 Event role: ${BADMASH_ROLE}`);
     console.log(`🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`);
+    console.log(`📅 Active Events Loaded: ${Object.keys(data.events).join(", ") || "None"}`);
 
     await registerCommands();
 });
