@@ -25,7 +25,7 @@ const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
     "Discord Moderator 🛠",
-    "❤‍‍🔥CO Leader"
+    "❤‍🔥CO Leader"
 ];
 
 const DATA_FILE = "./data.json";
@@ -68,10 +68,9 @@ function parseTimeToMinutes(timeStr) {
 
     const rawTime = clean.replace(/(AM|PM)/g, "").trim();
     const parts = rawTime.split(":");
-    if (parts.length < 2) return null;
 
     let hour = parseInt(parts[0], 10);
-    let minute = parseInt(parts[1], 10);
+    let minute = parts.length > 1 ? parseInt(parts[1], 10) : 0;
 
     if (isNaN(hour) || isNaN(minute)) return null;
 
@@ -79,6 +78,36 @@ function parseTimeToMinutes(timeStr) {
     if (isAM && hour === 12) hour = 0;
 
     return hour * 60 + minute;
+}
+
+function getISTTime() {
+    const now = new Date();
+    const formatter = new Intl.DateTimeFormat("en-US", {
+        timeZone: "Asia/Kolkata",
+        hour: "numeric",
+        minute: "numeric",
+        weekday: "short",
+        hour12: false,
+        hourCycle: "h23"
+    });
+
+    const parts = formatter.formatToParts(now);
+    const getPart = type => parts.find(p => p.type === type)?.value;
+
+    const hour = parseInt(getPart("hour"), 10);
+    const minute = parseInt(getPart("minute"), 10);
+    const weekday = getPart("weekday") ? getPart("weekday").replace(".", "") : "Mon";
+
+    const weekdayMap = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+    const currentDay = weekdayMap[weekday] || 1;
+
+    return {
+        hour,
+        minute,
+        totalMinutes: hour * 60 + minute,
+        currentDay,
+        timeString: `${hour.toString().padStart(2, "0")}:${minute.toString().padStart(2, "0")}`
+    };
 }
 
 /* =========================
@@ -108,20 +137,17 @@ function loadData() {
         if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
         if (!fileData.payouts) fileData.payouts = {};
 
-        // Force populate default events if empty or missing
         if (!fileData.events || Object.keys(fileData.events).length === 0) {
             fileData.events = DEFAULT_EVENTS;
             fs.writeFileSync(DATA_FILE, JSON.stringify(fileData, null, 2));
         }
 
-        // Normalize payouts
         for (const [id, val] of Object.entries(fileData.payouts)) {
             if (typeof val === "number") {
                 fileData.payouts[id] = { amount: val };
             }
         }
 
-        // Normalize events
         for (const [name, val] of Object.entries(fileData.events)) {
             if (Array.isArray(val)) {
                 fileData.events[name] = { times: val, days: null };
@@ -207,6 +233,10 @@ const commands = [
     new SlashCommandBuilder()
         .setName("test-ping")
         .setDescription("Send a test ping message to the event channel to verify setup (Mod only)"),
+
+    new SlashCommandBuilder()
+        .setName("check-schedule")
+        .setDescription("Check current bot IST time and upcoming event ping countdowns"),
 
     new SlashCommandBuilder()
         .setName("add-event")
@@ -341,6 +371,7 @@ async function registerCommands() {
 ========================= */
 
 async function showEvents(interaction) {
+    data = loadData();
     if (!data.events || Object.keys(data.events).length === 0) {
         return await interaction.reply({ content: "ℹ️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
     }
@@ -406,6 +437,39 @@ client.on("interactionCreate", async interaction => {
 
         if (command === "events") return await showEvents(interaction);
         if (command === "bonuses") return await showBonuses(interaction);
+
+        if (command === "check-schedule") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            data = loadData();
+
+            const ist = getISTTime();
+            let msg = `🕒 **Current Bot IST Time:** \`${ist.timeString}\` (Day ${ist.currentDay})\n\n`;
+
+            if (!data.events || Object.keys(data.events).length === 0) {
+                msg += "❌ No events found in schedule.";
+            } else {
+                msg += "📋 **Upcoming Event Ping Countdowns:**\n";
+                for (const [eventName, event] of Object.entries(data.events)) {
+                    const times = Array.isArray(event) ? event : event?.times;
+                    if (!times || !Array.isArray(times)) continue;
+
+                    for (const eventTime of times) {
+                        const eventMins = parseTimeToMinutes(eventTime);
+                        if (eventMins === null) {
+                            msg += `• **${eventName}** (${eventTime}) — ⚠️ Invalid time format\n`;
+                            continue;
+                        }
+
+                        let diff = eventMins - ist.totalMinutes;
+                        if (diff < 0) diff += 24 * 60;
+
+                        msg += `• **${eventName}** (${formatTime(eventTime)}) — Next ping in **${diff} minutes**\n`;
+                    }
+                }
+            }
+
+            return interaction.editReply(msg);
+        }
 
         if (command === "test-ping") {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
@@ -679,36 +743,17 @@ cron.schedule(
     "* * * * *",
     async () => {
         try {
+            data = loadData();
+
             if (!data.events || Object.keys(data.events).length === 0) return;
 
-            const now = new Date();
-            const formatter = new Intl.DateTimeFormat("en-GB", {
-                timeZone: "Asia/Kolkata",
-                year: "numeric", month: "2-digit", day: "2-digit",
-                hour: "2-digit", minute: "2-digit",
-                weekday: "short", hour12: false
-            });
-
-            const parts = formatter.formatToParts(now);
-            const getPart = type => parts.find(p => p.type === type)?.value;
-
-            const currentHour = parseInt(getPart("hour"), 10);
-            const currentMinute = parseInt(getPart("minute"), 10);
-            const weekdayNumbers = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
-            const currentDay = weekdayNumbers[getPart("weekday")];
-            const currentTotal = currentHour * 60 + currentMinute;
+            const ist = getISTTime();
 
             const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID).catch(() => null);
-            if (!guild) {
-                console.error(`[Cron Error] Guild ID '${GUILD_ID}' not found.`);
-                return;
-            }
+            if (!guild) return;
 
             const channel = guild.channels.cache.get(EVENT_CHANNEL_ID) || await guild.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
-            if (!channel || !channel.isTextBased()) {
-                console.error(`[Cron Error] Valid text channel '${EVENT_CHANNEL_ID}' not found.`);
-                return;
-            }
+            if (!channel || !channel.isTextBased()) return;
 
             const role = guild.roles.cache.find(r => r.name.trim().toLowerCase() === BADMASH_ROLE.trim().toLowerCase());
             const roleMention = role ? `${role}` : `@${BADMASH_ROLE}`;
@@ -723,26 +768,26 @@ cron.schedule(
                     const eventMinutes = parseTimeToMinutes(eventTime);
                     if (eventMinutes === null) continue;
 
-                    let difference = eventMinutes - currentTotal;
+                    let difference = eventMinutes - ist.totalMinutes;
                     if (difference < 0) difference += 24 * 60;
 
-                    if (difference !== 15 && difference !== 10 && difference !== 0) continue;
-
                     if (days && Array.isArray(days) && days.length > 0) {
-                        if (!days.includes(currentDay)) continue;
+                        if (!days.includes(ist.currentDay)) continue;
                     }
 
-                    let message;
-                    if (difference === 15) {
-                        message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${roleMention}\nGet ready!`;
-                    } else if (difference === 10) {
-                        message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${roleMention}\nGet ready!`;
-                    } else {
-                        message = `🔔 **${eventName}** is starting now!\n\n${roleMention}\nGet ready!`;
-                    }
+                    if (difference === 15 || difference === 10 || difference === 0) {
+                        let message;
+                        if (difference === 15) {
+                            message = `⏰ **${eventName}** starts in **15 minutes!**\n\n${roleMention}\nGet ready!`;
+                        } else if (difference === 10) {
+                            message = `⚠️ **${eventName}** starts in **10 minutes!**\n\n${roleMention}\nGet ready!`;
+                        } else {
+                            message = `🔔 **${eventName}** is starting now!\n\n${roleMention}\nGet ready!`;
+                        }
 
-                    await channel.send(message);
-                    console.log(`✅ [Cron] Announced ${eventName} (${difference} min trigger)`);
+                        await channel.send(message);
+                        console.log(`✅ [Cron Trigger] Announced ${eventName} (${difference}m trigger) at IST ${ist.timeString}`);
+                    }
                 }
             }
         } catch (error) {
