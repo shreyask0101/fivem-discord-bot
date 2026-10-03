@@ -18,9 +18,9 @@ const GUILD_ID = process.env.GUILD_ID;
 
 // Channel Environment Variables
 const EVENT_CHANNEL_ID = process.env.EVENT_CHANNEL_ID;                 // Event Announcements & Cron Pings
-const EVENT_LOG_CHANNEL_ID = process.env.EVENT_LOG_CHANNEL_ID;         // Event Logs Submissions (〣🏆・event-logs)
-const FAMILY_BALANCE_CHANNEL_ID = process.env.FAMILY_BALANCE_CHANNEL_ID; // Family Balance Logs Channel (┇・family-balance-logs)
-const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus & Payout Logs Channel (〣💸・bonus-logs)
+const EVENT_LOG_CHANNEL_ID = process.env.EVENT_LOG_CHANNEL_ID;         // Event Logs Submissions
+const FAMILY_BALANCE_CHANNEL_ID = process.env.FAMILY_BALANCE_CHANNEL_ID; // Family Balance Logs Channel
+const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus & Payout Logs Channel
 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
@@ -37,27 +37,35 @@ const client = new Client({
 });
 
 /* =========================
-   DEFAULT CONFIGURATIONS
+   UPDATED CLAN EVENT CONFIGURATIONS (IST)
 ========================= */
 
 const DEFAULT_BONUSES = {
-    "Cartel War": { kill: 3000, alive: 0, top: 0, parachute: 0, attendance: 0, killOnLoss: false },
-    "Crown Holder": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
     "Weapons Factory": { kill: 3000, alive: 0, top: 10000, parachute: 2000, attendance: 0, killOnLoss: false },
-    "Biz War": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
-    "Clan Raid": { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 2500, killOnLoss: false }
+    "Business War": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
+    "Crown Event": { kill: 3000, alive: 2000, top: 10000, parachute: 0, attendance: 0, killOnLoss: false },
+    "Cartel War": { kill: 3000, alive: 0, top: 0, parachute: 0, attendance: 0, killOnLoss: false },
+    "Clan Showdown": { kill: 0, alive: 0, top: 0, parachute: 0, attendance: 2500, killOnLoss: false }
 };
 
 const DEFAULT_EVENTS = {
-    "Cartel War": { times: ["15:00", "21:00"], days: null },
-    "Crown Holder": { times: ["18:00"], days: null },
-    "Weapons Factory": { times: ["13:00", "19:00"], days: null },
-    "Biz War": { times: ["14:00", "20:00"], days: null },
-    "Clan Raid": { times: ["17:00"], days: null }
+    "Weapons Factory": { times: ["03:30", "17:30"], days: null },
+    "Business War": { times: ["01:30", "19:30"], days: null },
+    "Crown Event": { times: ["02:30", "14:30", "20:30"], days: null },
+    "Cartel War": {
+        times: [
+            "00:00", "01:00", "02:00", "03:00", "04:00", "05:00",
+            "06:00", "07:00", "08:00", "09:00", "10:00", "11:00",
+            "12:00", "13:00", "14:00", "15:00", "16:00", "17:00",
+            "18:00", "19:00", "20:00", "21:00", "22:00", "23:00"
+        ],
+        days: null
+    },
+    "Clan Showdown": { times: ["22:00"], days: [6] } // Saturday only (1=Mon ... 6=Sat, 7=Sun)
 };
 
 /* =========================
-   TIME PARSER HELPER
+   TIME & DATE HELPERS
 ========================= */
 
 function parseTimeToMinutes(timeStr) {
@@ -110,8 +118,26 @@ function getISTTime() {
     };
 }
 
+function formatTime(time) {
+    const mins = parseTimeToMinutes(time);
+    if (mins === null) return time;
+    let h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const suffix = h >= 12 ? "PM" : "AM";
+    h = h % 12;
+    if (h === 0) h = 12;
+    const mStr = m < 10 ? `0${m}` : `${m}`;
+    return `${h}:${mStr} ${suffix}`;
+}
+
+function formatDays(days) {
+    if (!days || !Array.isArray(days) || days.length === 0) return "Every day";
+    const names = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+    return days.map(day => names[day - 1] || "?").join(", ");
+}
+
 /* =========================
-   DATA FUNCTIONS
+   DATA MANAGEMENT
 ========================= */
 
 function loadData() {
@@ -172,7 +198,7 @@ function saveData(data) {
 let data = loadData();
 
 /* =========================
-   HELPERS & PERMISSIONS
+   PERMISSIONS & HELPERS
 ========================= */
 
 function isModerator(interaction) {
@@ -199,26 +225,8 @@ function getBonusForEvent(eventName) {
     return key ? data.bonuses[key] : null;
 }
 
-function formatTime(time) {
-    const mins = parseTimeToMinutes(time);
-    if (mins === null) return time;
-    let h = Math.floor(mins / 60);
-    const m = mins % 60;
-    const suffix = h >= 12 ? "PM" : "AM";
-    h = h % 12;
-    if (h === 0) h = 12;
-    const mStr = m < 10 ? `0${m}` : `${m}`;
-    return `${h}:${mStr} ${suffix}`;
-}
-
-function formatDays(days) {
-    if (!days || !Array.isArray(days) || days.length === 0) return "Every day";
-    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    return days.map(day => names[day - 1] || "?").join(", ");
-}
-
 /* =========================
-   SLASH COMMANDS
+   SLASH COMMAND DEFINITIONS
 ========================= */
 
 const commands = [
@@ -265,11 +273,11 @@ const commands = [
                 .setDescription("Select event name")
                 .setRequired(true)
                 .addChoices(
-                    { name: "Cartel War", value: "Cartel War" },
-                    { name: "Crown Holder", value: "Crown Holder" },
                     { name: "Weapons Factory", value: "Weapons Factory" },
-                    { name: "Biz War", value: "Biz War" },
-                    { name: "Clan Raid", value: "Clan Raid" }
+                    { name: "Business War", value: "Business War" },
+                    { name: "Crown Event", value: "Crown Event" },
+                    { name: "Cartel War", value: "Cartel War" },
+                    { name: "Clan Showdown", value: "Clan Showdown" }
                 )
         )
         .addStringOption(option =>
@@ -293,11 +301,11 @@ const commands = [
                 .setDescription("Select event name")
                 .setRequired(false)
                 .addChoices(
-                    { name: "Cartel War", value: "Cartel War" },
-                    { name: "Crown Holder", value: "Crown Holder" },
                     { name: "Weapons Factory", value: "Weapons Factory" },
-                    { name: "Biz War", value: "Biz War" },
-                    { name: "Clan Raid", value: "Clan Raid" }
+                    { name: "Business War", value: "Business War" },
+                    { name: "Crown Event", value: "Crown Event" },
+                    { name: "Cartel War", value: "Cartel War" },
+                    { name: "Clan Showdown", value: "Clan Showdown" }
                 )
         )
         .addStringOption(option =>
@@ -375,7 +383,7 @@ async function showEvents(interaction) {
     if (!data.events || Object.keys(data.events).length === 0) {
         return await interaction.reply({ content: "ℹ️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
     }
-    let message = "## 📅 Event Schedule\n\n";
+    let message = "## 📅 Event Schedule (IST)\n\n";
     for (const [name, event] of Object.entries(data.events)) {
         const times = Array.isArray(event) ? event : (event?.times || []);
         const days = Array.isArray(event) ? null : (event?.days || null);
