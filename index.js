@@ -25,7 +25,7 @@ const BONUS_LOG_CHANNEL_ID = process.env.BONUS_LOG_CHANNEL_ID;         // Bonus 
 const BADMASH_ROLE = "💎Badmash";
 const MOD_ROLES = [
     "Discord Moderator 🛠",
-    "❤️️‍🔥CO Leader"
+    "❤‍🔥CO Leader"
 ];
 
 const DATA_FILE = "./data.json";
@@ -49,17 +49,43 @@ const DEFAULT_BONUSES = {
 };
 
 /* =========================
+   TIME PARSER HELPER (12h & 24h Safe)
+========================= */
+
+function parseTimeToMinutes(timeStr) {
+    if (!timeStr || typeof timeStr !== "string") return null;
+    const clean = timeStr.trim().toUpperCase();
+    const isPM = clean.includes("PM");
+    const isAM = clean.includes("AM");
+
+    const rawTime = clean.replace(/(AM|PM)/g, "").trim();
+    const parts = rawTime.split(":");
+    if (parts.length < 2) return null;
+
+    let hour = parseInt(parts[0], 10);
+    let minute = parseInt(parts[1], 10);
+
+    if (isNaN(hour) || isNaN(minute)) return null;
+
+    if (isPM && hour < 12) hour += 12;
+    if (isAM && hour === 12) hour = 0;
+
+    return hour * 60 + minute;
+}
+
+/* =========================
    DATA FUNCTIONS
 ========================= */
 
 function loadData() {
+    let initialData = {
+        events: {},
+        bonuses: DEFAULT_BONUSES,
+        familyBalance: 0,
+        payouts: {}
+    };
+
     if (!fs.existsSync(DATA_FILE)) {
-        const initialData = {
-            events: {},
-            bonuses: DEFAULT_BONUSES,
-            familyBalance: 0,
-            payouts: {}
-        };
         fs.writeFileSync(DATA_FILE, JSON.stringify(initialData, null, 2));
         return initialData;
     }
@@ -70,10 +96,25 @@ function loadData() {
         if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
         if (!fileData.payouts) fileData.payouts = {};
         if (!fileData.events) fileData.events = {};
+
+        // Repair/Normalize payouts (handles raw numbers vs objects)
+        for (const [id, val] of Object.entries(fileData.payouts)) {
+            if (typeof val === "number") {
+                fileData.payouts[id] = { amount: val };
+            }
+        }
+
+        // Repair/Normalize events (handles raw time arrays vs event objects)
+        for (const [name, val] of Object.entries(fileData.events)) {
+            if (Array.isArray(val)) {
+                fileData.events[name] = { times: val, days: null };
+            }
+        }
+
         return fileData;
     } catch (err) {
         console.error("Error reading data.json, preserving structure:", err);
-        return { events: {}, bonuses: DEFAULT_BONUSES, familyBalance: 0, payouts: {} };
+        return initialData;
     }
 }
 
@@ -109,6 +150,24 @@ function getBonusForEvent(eventName) {
         k => k.toLowerCase() === eventName.trim().toLowerCase()
     );
     return key ? data.bonuses[key] : null;
+}
+
+function formatTime(time) {
+    const mins = parseTimeToMinutes(time);
+    if (mins === null) return time;
+    let h = Math.floor(mins / 60);
+    const m = mins % 60;
+    const suffix = h >= 12 ? "PM" : "AM";
+    h = h % 12;
+    if (h === 0) h = 12;
+    const mStr = m < 10 ? `0${m}` : `${m}`;
+    return `${h}:${mStr} ${suffix}`;
+}
+
+function formatDays(days) {
+    if (!days || !Array.isArray(days) || days.length === 0) return "Every day";
+    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+    return days.map(day => names[day - 1] || "?").join(", ");
 }
 
 /* =========================
@@ -257,34 +316,21 @@ async function registerCommands() {
 }
 
 /* =========================
-   HELPERS
-========================= */
-
-function formatTime(time) {
-    const [hour, minute] = time.split(":");
-    let h = parseInt(hour);
-    const suffix = h >= 12 ? "PM" : "AM";
-    h = h % 12;
-    if (h === 0) h = 12;
-    return `${h}:${minute} ${suffix}`;
-}
-
-function formatDays(days) {
-    if (!days) return "Every day";
-    const names = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-    return days.map(day => names[day - 1] || "?").join(", ");
-}
-
-/* =========================
    COMMAND HANDLERS
 ========================= */
 
 async function showEvents(interaction) {
+    if (!data.events || Object.keys(data.events).length === 0) {
+        return await interaction.reply({ content: "ℹ️ No events scheduled currently.", flags: MessageFlags.Ephemeral });
+    }
     let message = "## 📅 Event Schedule\n\n";
     for (const [name, event] of Object.entries(data.events)) {
+        const times = Array.isArray(event) ? event : (event?.times || []);
+        const days = Array.isArray(event) ? null : (event?.days || null);
+
         message += `### ${name}\n`;
-        message += event.times.map(formatTime).join(" • ");
-        message += `\n${formatDays(event.days)}\n\n`;
+        message += times.length > 0 ? times.map(formatTime).join(" • ") : "No times set";
+        message += `\n${formatDays(days)}\n\n`;
     }
     await interaction.reply({ content: message, flags: MessageFlags.Ephemeral });
 }
@@ -365,39 +411,60 @@ client.on("interactionCreate", async interaction => {
         /* --- PAYOUT COMMANDS --- */
 
         if (command === "payout") {
+            await interaction.deferReply();
             const member = interaction.options.getUser("member") || interaction.user;
-            const userPayout = data.payouts[member.id]?.amount || 0;
-            return interaction.reply({
+            const record = data.payouts[member.id];
+            const userPayout = typeof record === "number" ? record : (record?.amount || 0);
+
+            return interaction.editReply({
                 content: `💵 **Total Accumulated Payout for ${member}:** $${userPayout.toLocaleString()}`
             });
         }
 
         if (command === "all-payouts") {
-            if (Object.keys(data.payouts).length === 0) {
-                return interaction.reply({ content: "ℹ️ No member payouts recorded yet." });
+            await interaction.deferReply();
+
+            if (!data.payouts || Object.keys(data.payouts).length === 0) {
+                return interaction.editReply({ content: "ℹ️ No member payouts recorded yet." });
             }
-            let list = "## 📜 Cumulative Member Payout Balances\n\n";
+
+            let header = "## 📜 Cumulative Member Payout Balances\n\n";
+            let currentChunk = header;
+
             for (const [id, info] of Object.entries(data.payouts)) {
-                list += `• <@${id}>: **$${info.amount.toLocaleString()}**\n`;
+                const amount = typeof info === "number" ? info : (info?.amount || 0);
+                const line = `• <@${id}>: **$${amount.toLocaleString()}**\n`;
+
+                if ((currentChunk + line).length > 1900) {
+                    await interaction.followUp({ content: currentChunk });
+                    currentChunk = "";
+                }
+                currentChunk += line;
             }
-            return interaction.reply({ content: list });
+
+            if (currentChunk.length > 0) {
+                return interaction.editReply({ content: currentChunk });
+            }
         }
 
         if (command === "edit-payout") {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
             const action = interaction.options.getString("action");
             const member = interaction.options.getUser("member");
             const amount = interaction.options.getInteger("amount");
 
-            if (!data.payouts[member.id]) {
-                data.payouts[member.id] = { amount: 0 };
-            }
+            const record = data.payouts[member.id];
+            let currentAmount = typeof record === "number" ? record : (record?.amount || 0);
 
-            if (action === "add") data.payouts[member.id].amount += amount;
-            else if (action === "subtract") data.payouts[member.id].amount = Math.max(0, data.payouts[member.id].amount - amount);
-            else if (action === "set") data.payouts[member.id].amount = amount;
+            if (action === "add") currentAmount += amount;
+            else if (action === "subtract") currentAmount = Math.max(0, currentAmount - amount);
+            else if (action === "set") currentAmount = amount;
 
+            data.payouts[member.id] = { amount: currentAmount };
             saveData(data);
-            return interaction.reply(`✅ Updated ${member}'s payout balance (${action}). New Total: **$${data.payouts[member.id].amount.toLocaleString()}**`);
+
+            return interaction.editReply(`✅ Updated ${member}'s payout balance (${action}). New Total: **$${currentAmount.toLocaleString()}**`);
         }
 
         /* --- EVENT RESULT SUBMISSIONS --- */
@@ -436,10 +503,10 @@ client.on("interactionCreate", async interaction => {
 
                     if (userIdMatch) {
                         const userId = userIdMatch[1];
-                        if (!data.payouts[userId]) {
-                            data.payouts[userId] = { amount: 0 };
-                        }
-                        data.payouts[userId].amount += earnedPayout;
+                        const record = data.payouts[userId];
+                        let currentAmount = typeof record === "number" ? record : (record?.amount || 0);
+                        
+                        data.payouts[userId] = { amount: currentAmount + earnedPayout };
                     }
 
                     statsFormatted += `${memberMention} — ${kills} Kills — +$${earnedPayout.toLocaleString()}\n`;
@@ -556,7 +623,7 @@ client.on("interactionCreate", async interaction => {
             }
             delete data.events[name];
             saveData(data);
-            return interaction.reply(`🗑️ Event **${name}** removed.`);
+            return interaction.reply(`🗑️️ Event **${name}** removed.`);
         }
 
     } catch (error) {
@@ -578,17 +645,14 @@ client.on("interactionCreate", async interaction => {
 });
 
 /* =========================
-   AUTOMATIC EVENT SCHEDULER (WITH DIAGNOSTIC LOGS)
+   AUTOMATIC EVENT SCHEDULER
 ========================= */
 
 cron.schedule(
     "* * * * *",
     async () => {
         try {
-            // Check if events exist in data.json
-            if (!data.events || Object.keys(data.events).length === 0) {
-                return; // Silent return if no events are configured
-            }
+            if (!data.events || Object.keys(data.events).length === 0) return;
 
             const now = new Date();
             const formatter = new Intl.DateTimeFormat("en-GB", {
@@ -605,54 +669,38 @@ cron.schedule(
             const currentMinute = parseInt(getPart("minute"));
             const weekdayNumbers = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
             const currentDay = weekdayNumbers[getPart("weekday")];
+            const currentTotal = currentHour * 60 + currentMinute;
 
-            // 1. Fetch Guild
             const guild = client.guilds.cache.get(GUILD_ID) || await client.guilds.fetch(GUILD_ID).catch(() => null);
             if (!guild) {
                 console.error(`[Cron Error] Guild ID '${GUILD_ID}' not found.`);
                 return;
             }
 
-            // 2. Fetch Role
             const role = guild.roles.cache.find(r => r.name === BADMASH_ROLE);
             if (!role) {
-                console.error(`[Cron Error] Role '${BADMASH_ROLE}' not found in server.`);
+                console.error(`[Cron Error] Role '${BADMASH_ROLE}' not found.`);
                 return;
             }
 
-            // 3. Fetch Event Channel
             const channel = guild.channels.cache.get(EVENT_CHANNEL_ID) || await guild.channels.fetch(EVENT_CHANNEL_ID).catch(() => null);
-            if (!channel) {
-                console.error(`[Cron Error] Channel ID '${EVENT_CHANNEL_ID}' not found.`);
+            if (!channel || !channel.isTextBased()) {
+                console.error(`[Cron Error] Valid text channel '${EVENT_CHANNEL_ID}' not found.`);
                 return;
             }
 
-            if (!channel.isTextBased()) {
-                console.error(`[Cron Error] Channel ID '${EVENT_CHANNEL_ID}' is not a text channel.`);
-                return;
-            }
-
-            const permissions = channel.permissionsFor(client.user);
-            if (!permissions || !permissions.has("SendMessages")) {
-                console.error(`[Cron Error] Bot missing 'Send Messages' permission in channel '${EVENT_CHANNEL_ID}'.`);
-                return;
-            }
-
-            function getTimeDifference(eventTime) {
-                const [eventHour, eventMinute] = eventTime.split(":").map(Number);
-                let currentTotal = currentHour * 60 + currentMinute;
-                let eventTotal = eventHour * 60 + eventMinute;
-                let difference = eventTotal - currentTotal;
-                if (difference < 0) difference += 24 * 60;
-                return difference;
-            }
-
-            // 4. Iterate and Trigger Announcements
             for (const [eventName, event] of Object.entries(data.events)) {
-                if (!event.times || !Array.isArray(event.times)) continue;
+                const times = Array.isArray(event) ? event : event?.times;
+                const days = Array.isArray(event) ? null : event?.days;
 
-                for (const eventTime of event.times) {
-                    const difference = getTimeDifference(eventTime);
+                if (!times || !Array.isArray(times)) continue;
+
+                for (const eventTime of times) {
+                    const eventMinutes = parseTimeToMinutes(eventTime);
+                    if (eventMinutes === null) continue;
+
+                    let difference = eventMinutes - currentTotal;
+                    if (difference < 0) difference += 24 * 60;
 
                     if (eventName === "Cartel War") {
                         if (difference !== 0) continue;
@@ -660,8 +708,8 @@ cron.schedule(
 
                     if (difference !== 15 && difference !== 10 && difference !== 0) continue;
 
-                    if (event.days && Array.isArray(event.days) && event.days.length > 0) {
-                        if (!event.days.includes(currentDay)) continue;
+                    if (days && Array.isArray(days) && days.length > 0) {
+                        if (!days.includes(currentDay)) continue;
                     }
 
                     let message;
@@ -674,7 +722,7 @@ cron.schedule(
                     }
 
                     await channel.send(message);
-                    console.log(`✅ [Cron] Announced ${eventName} (${difference} min trigger) in channel.`);
+                    console.log(`✅ [Cron] Announced ${eventName} (${difference} min trigger)`);
                 }
             }
         } catch (error) {
@@ -683,6 +731,19 @@ cron.schedule(
     },
     { timezone: "Asia/Kolkata" }
 );
+
+/* =========================
+   BOT READY
+========================= */
+
+client.once("clientReady", async () => {
+    console.log(`✅ Logged in as ${client.user.tag}`);
+    console.log(`🌏 Timezone: Asia/Kolkata`);
+    console.log(`🔔 Event role: ${BADMASH_ROLE}`);
+    console.log(`🔐 Moderator roles: ${MOD_ROLES.join(" | ")}`);
+
+    await registerCommands();
+});
 
 /* =========================
    LOGIN
