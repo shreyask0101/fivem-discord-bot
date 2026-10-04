@@ -159,26 +159,16 @@ function loadData() {
 
     try {
         const fileData = JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+        
+        // Force sync events and bonuses with current DEFAULT values in code
+        fileData.events = DEFAULT_EVENTS;
         fileData.bonuses = DEFAULT_BONUSES;
+
         if (fileData.familyBalance === undefined) fileData.familyBalance = 0;
         if (!fileData.payouts) fileData.payouts = {};
 
-        if (!fileData.events || Object.keys(fileData.events).length === 0) {
-            fileData.events = DEFAULT_EVENTS;
-            fs.writeFileSync(DATA_FILE, JSON.stringify(fileData, null, 2));
-        }
-
-        for (const [id, val] of Object.entries(fileData.payouts)) {
-            if (typeof val === "number") {
-                fileData.payouts[id] = { amount: val };
-            }
-        }
-
-        for (const [name, val] of Object.entries(fileData.events)) {
-            if (Array.isArray(val)) {
-                fileData.events[name] = { times: val, days: null };
-            }
-        }
+        // Save updated schedule back to file
+        fs.writeFileSync(DATA_FILE, JSON.stringify(fileData, null, 2));
 
         return fileData;
     } catch (err) {
