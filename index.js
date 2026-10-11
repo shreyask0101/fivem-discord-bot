@@ -887,20 +887,26 @@ client.on("interactionCreate", async interaction => {
 
 client.on("messageCreate", async message => {
     if (message.author.bot || !message.guild) return;
+
     const session = ttsSessions.get(message.guildId);
     if (!session) return;
 
     try {
         const url = googleTTS.getAudioUrl(message.content, { lang: "en", slow: false, host: "https://translate.google.com" });
         const resource = createAudioResource(url);
+
         session.queue.push(resource);
+        
         if (session.player.state.status === AudioPlayerStatus.Idle) {
             const nextRes = session.queue.shift();
-            if (nextRes) session.player.play(nextRes);
+            if (nextRes) {
+                session.player.play(nextRes);
+            }
         }
-    } catch (err) {}
+    } catch (err) {
+        console.error("TTS Audio Error:", err);
+    }
 });
-
 /* =========================
    CRON EVENT SCHEDULER
 ========================= */
